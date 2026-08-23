@@ -1,6 +1,6 @@
 # Portal
 
-![Portal](./resources/portal-logo.png)
+![Portal](resources/portal-logo.png)
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
 
