@@ -100,16 +100,6 @@ npm run package    # .vsix (no bundled node_modules)
 
 Load the packaged VSIX, or run the extension in a desktop VS Code host (`extensionKind`: `ui` + `workspace`).
 
-## Design notes
-
-Portal is a slim fork of [nexus-bridge](https://github.com/s3hq4y/nexus-bridge):
-
-- MCP text tools and the Python client distribution (`/client/<token>/…`) are gone.
-- Shortcuts, prompt templates, and AI-launcher buttons are gone.
-- Sidebar and settings use a flat Windows 10 look: square controls, Segoe UI, Win10 semantic colors.
-
-Protocol: MCP **2024-11-05**, Streamable HTTP (JSON or one-shot SSE). CORS is open; TLS terminates at the tunnel.
-
 ## License
 
 MIT

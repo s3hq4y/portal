@@ -100,16 +100,6 @@ npm run package    # 打 .vsix（不打包 node_modules）
 
 安装打好的 VSIX，或在桌面版 VS Code 宿主里运行本扩展（`extensionKind`：`ui` + `workspace`）。
 
-## 设计说明
-
-Portal 是 [nexus-bridge](https://github.com/s3hq4y/nexus-bridge) 的精简派生：
-
-- 去掉 MCP 文本工具和 Python 客户端分发（`/client/<token>/…`）。
-- 去掉快捷方式、提示词模板、AI 入口按钮。
-- 侧边栏与设置做成仿 Windows 10 扁平风：直角控件、Segoe UI、Win10 语义色。
-
-协议：MCP **2024-11-05**，Streamable HTTP（JSON 或一次性 SSE）。CORS 全开，TLS 在隧道终止。
-
 ## 许可证
 
 MIT
