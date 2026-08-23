@@ -1,0 +1,15 @@
+.vscode/
+node_modules/
+src/
+out/
+build/
+**/*.map
+.DS_Store
+Thumbs.db
+.git/
+tsconfig.json
+*.log
+npm-debug.log*
+*.vsix
+*.zip
+.gitignore

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Portal</title>
+  <!-- Windows 10-style accent tile: square, flat, and high-contrast. -->
+  <rect x="56" y="56" width="400" height="400" fill="#0078D4"/>
+  <rect x="400" y="56" width="56" height="400" fill="#005A9E"/>
+  <rect x="56" y="56" width="344" height="12" fill="#50E6FF"/>
+
+  <!-- Cyan doorway establishes the portal silhouette. -->
+  <path d="M112 400V112H356V400H320V150H148V400Z" fill="#50E6FF"/>
+
+  <!-- White connector keeps the original Portal plug identity. -->
+  <path d="M194 190H226V238H274V190H306V238H330V322H274V382H226V322H170V238H194Z" fill="#FFFFFF"/>
+</svg>
