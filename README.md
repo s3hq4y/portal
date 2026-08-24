@@ -6,7 +6,7 @@
 
 Portal is a VS Code extension that exposes the current workspace as a **public MCP endpoint**. It is deliberately small: **commands and file transfer only**.
 
-Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your machine over a tunnel. The agent can run shells and move files.
+Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your machine over a tunnel. The agent can run shells and move files. It cannot edit text through MCP tools — there are none.
 
 ## What you get
 
@@ -29,7 +29,7 @@ Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your
 
 **Shells:** `powershell` (Windows default on a local folder), `pwsh`, `cmd`, `bash` / `sh` (Git Bash when present). UTF-8 is set up automatically.
 
-**WSL:** If the window is a WSL folder, Portal still runs on Windows (so the tunnel keeps using Windows ngrok/cloudflared) but binds files to `\\wsl.localhost\<distro>\...` and runs default commands with `wsl.exe` inside that distro. Do not treat `/home/...` as a path on the Windows drive.
+**WSL:** If the window is a WSL folder, Portal still runs on Windows (so the tunnel keeps using Windows ngrok/cloudflared). Default commands and the HTTP file API go through `wsl.exe` into that distro. Do not treat `/home/...` as a path on the Windows drive.
 
 **Session:** reuse the `Mcp-Session-Id` from `initialize`. If it is lost or rejected, initialize again — do not invent an ID.
 

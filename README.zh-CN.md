@@ -29,7 +29,7 @@ Portal 是一个 VS Code 扩展，把当前工作区暴露成 **公开 MCP 端�
 
 **Shell：** 本地 Windows 文件夹默认 `powershell`，另有 `pwsh`、`cmd`、`bash` / `sh`（检测到 Git Bash 时）。会自动配置 UTF-8。
 
-**WSL：** 若窗口打开的是 WSL 文件夹，Portal 仍跑在 Windows（隧道继续用 Windows 上的 ngrok/cloudflared），但文件会绑到 `\\wsl.localhost\<发行版>\...`，默认命令经 `wsl.exe` 在发行版里执行。不要把 `/home/...` 当成 Windows 盘上的路径。
+**WSL：** 若窗口打开的是 WSL 文件夹，Portal 仍跑在 Windows（隧道继续用 Windows 上的 ngrok/cloudflared）。默认命令和 HTTP 文件 API 都经 `wsl.exe` 进发行版。不要把 `/home/...` 当成 Windows 盘上的路径。
 
 **会话：** 复用 `initialize` 返回的 `Mcp-Session-Id`。丢失或被拒就重新 initialize，不要自己编 ID。
 

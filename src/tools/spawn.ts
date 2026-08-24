@@ -257,6 +257,9 @@ export function launchCommand(prepared: PreparedCommand, cwd: string, posixCwd?:
     // Do not use the UNC workspace as Win32 cwd for wsl.exe; --cd is the source of truth.
     spawnCwd = process.env.SystemRoot || "C:\\Windows";
     executable = prepared.executable;
+  } else if (process.platform === "win32" && spawnCwd.startsWith("\\\\")) {
+    // PowerShell/cmd refuse a UNC cwd ("UNC host ... access is not allowed").
+    spawnCwd = process.env.SystemRoot || "C:\\Windows";
   }
   return spawn(executable, args, {
     cwd: spawnCwd,

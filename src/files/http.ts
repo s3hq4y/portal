@@ -20,13 +20,21 @@ import { pipeline } from "node:stream/promises";
 import { guessContentType, isDenied, parseFilesRequest, resolveSafe, normalizeRel } from "./paths";
 import { unzipEntries, zipEntries, ZipEntry } from "./zip";
 import { SKIP_DIRS } from "../tools/workspace";
+import { WslIo } from "./wsl-io";
 
 export interface FileHttpOptions {
   workspaceRoot: string;
   routeToken: string;
   maxBytes: number;
   filesBaseUrl?: string;
+  wslDistro?: string;
+  posixRoot?: string;
   onTransfer?: (info: { op: string; path: string; ok: boolean; bytes?: number; detail?: string }) => void;
+}
+
+function wslIo(opts: FileHttpOptions): WslIo | undefined {
+  if (!opts.wslDistro || !opts.posixRoot) return undefined;
+  return new WslIo(opts.wslDistro, opts.posixRoot);
 }
 
 // Wide-open CORS (same rationale as mcp-server) incl. headers clients send
@@ -101,7 +109,7 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
     if (!parsed.rel) { text(res, 400, "Missing path"); return; }
     if (isDenied(parsed.rel)) { text(res, 403, "Path is blocked"); return; }
 
-    const abs = resolveSafe(opts.workspaceRoot, parsed.rel);
+    const abs = wslIo(opts) ? parsed.rel : resolveSafe(opts.workspaceRoot, parsed.rel);
     if (method === "GET" || method === "HEAD") {
       await sendFile(req, res, opts, abs, parsed.rel, method === "HEAD");
       return;
@@ -126,6 +134,35 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
 // Recursive listing capped at 2000 entries; hidden, SKIP_DIRS and DENY paths
 // are skipped.
 async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: string, globPat: string): Promise<void> {
+  const wsl = wslIo(opts);
+  if (wsl) {
+    const st = await wsl.stat(relDir || ".");
+    if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
+    if (st.kind === "file") {
+      const rel = normalizeRel(relDir || ".");
+      json(res, 200, { ok: true, files: [{ path: rel, size: st.size, mtime: new Date(st.mtimeMs).toISOString(), kind: "file" }] });
+      return;
+    }
+    const entries = await wsl.list(relDir || ".", true);
+    const files: Array<Record<string, unknown>> = [];
+    for (const e of entries) {
+      if (files.length >= 2000) break;
+      if (e.kind !== "file") continue;
+      if (isDenied(e.rel)) continue;
+      const parts = e.rel.split("/");
+      if (parts.some((seg) => SKIP_DIRS.has(seg))) continue;
+      if (globPat && globPat !== "**/*" && !simpleGlob(globPat, e.rel)) continue;
+      files.push({
+        path: e.rel,
+        size: e.size,
+        mtime: new Date(e.mtimeMs).toISOString(),
+        kind: "file",
+      });
+    }
+    json(res, 200, { ok: true, root: normalizeRel(relDir || "."), count: files.length, files });
+    opts.onTransfer?.({ op: "LIST", path: relDir || ".", ok: true, bytes: files.length });
+    return;
+  }
   const root = resolveSafe(opts.workspaceRoot, relDir || ".");
   const st = await fsp.stat(root).catch(() => null);
   if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
@@ -195,6 +232,43 @@ async function sha256File(abs: string): Promise<string> {
 // Download handler: supports single byte-ranges (206 Partial Content) and
 // advertises Accept-Ranges.
 async function sendFile(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions, abs: string, rel: string, headOnly: boolean): Promise<void> {
+  const wsl = wslIo(opts);
+  if (wsl) {
+    const st = await wsl.stat(rel);
+    if (!st) { text(res, 404, "Not found"); return; }
+    if (st.kind === "dir") {
+      await listDir(res, opts, rel, "**/*");
+      return;
+    }
+    const data = await wsl.readFile(rel, opts.maxBytes);
+    const hash = createHash("sha256").update(data).digest("hex");
+    const size = data.length;
+    const range = parseRange(String(req.headers.range || ""), size);
+    const start = range ? range.start : 0;
+    const end = range ? range.end : size - 1;
+    const slice = size === 0 ? Buffer.alloc(0) : data.subarray(start, end + 1);
+    const headers: Record<string, string | number> = {
+      ...cors,
+      "Content-Type": guessContentType(rel),
+      "Content-Length": slice.length,
+      "Accept-Ranges": "bytes",
+      "Last-Modified": new Date(st.mtimeMs).toUTCString(),
+      "X-File-Sha256": hash,
+      "X-File-Path": rel,
+      "ETag": `"${hash}"`,
+      "Content-Disposition": `attachment; filename="${path.basename(rel).replace(/"/g, "")}"`,
+    };
+    if (range) {
+      headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+      res.writeHead(206, headers);
+    } else {
+      res.writeHead(200, headers);
+    }
+    if (headOnly || slice.length === 0) { res.end(); opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: 0 }); return; }
+    res.end(slice);
+    opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: slice.length });
+    return;
+  }
   const st = await fsp.stat(abs).catch(() => null);
   if (!st) { text(res, 404, "Not found"); return; }
   if (st.isDirectory()) {
@@ -252,6 +326,19 @@ function parseRange(header: string, size: number): { start: number; end: number 
 // disk stream is full).
 async function receiveFile(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions, abs: string, rel: string, overwrite: boolean): Promise<void> {
   if (isDenied(rel)) { text(res, 403, "Path is blocked"); return; }
+  const wsl = wslIo(opts);
+  if (wsl) {
+    const st = await wsl.stat(rel);
+    const exists = st?.kind === "file";
+    if (exists && !overwrite) { json(res, 409, { ok: false, error: "exists" }); return; }
+    if (st?.kind === "dir") { json(res, 400, { ok: false, error: "Refusing to overwrite a directory" }); return; }
+    const data = await readRawBody(req, opts.maxBytes);
+    await wsl.writeFile(rel, data);
+    const hash = createHash("sha256").update(data).digest("hex");
+    opts.onTransfer?.({ op: "PUT", path: rel, ok: true, bytes: data.length });
+    json(res, exists ? 200 : 201, { ok: true, path: rel, bytes: data.length, sha256: hash, overwritten: exists });
+    return;
+  }
   const exists = await fsp.stat(abs).then((s) => s.isFile()).catch(() => false);
   if (exists && !overwrite) { json(res, 409, { ok: false, error: "exists" }); return; }
   await fsp.mkdir(path.dirname(abs), { recursive: true });
@@ -292,6 +379,16 @@ async function receiveFile(req: http.IncomingMessage, res: http.ServerResponse, 
 }
 
 async function deleteFile(res: http.ServerResponse, opts: FileHttpOptions, abs: string, rel: string): Promise<void> {
+  const wsl = wslIo(opts);
+  if (wsl) {
+    const st = await wsl.stat(rel);
+    if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
+    if (st.kind === "dir") { json(res, 400, { ok: false, error: "Refusing to delete a directory" }); return; }
+    await wsl.unlink(rel);
+    opts.onTransfer?.({ op: "DELETE", path: rel, ok: true });
+    json(res, 200, { ok: true, deleted: rel });
+    return;
+  }
   const st = await fsp.stat(abs).catch(() => null);
   if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
   if (st.isDirectory()) { json(res, 400, { ok: false, error: "Refusing to delete a directory" }); return; }
@@ -325,9 +422,41 @@ async function readRawBody(req: http.IncomingMessage, max: number): Promise<Buff
 async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions): Promise<void> {
   const body = await readJsonBody(req, 1_000_000);
   const paths: string[] = Array.isArray(body?.paths) ? body.paths.map(String) : ["."];
-  // Collect files under the requested paths, respecting DENY + the size cap.
   const entries: ZipEntry[] = [];
   let total = 0;
+  const wsl = wslIo(opts);
+  if (wsl) {
+    for (const p of paths) {
+      const st = await wsl.stat(p);
+      if (!st) continue;
+      if (st.kind === "file") {
+        if (isDenied(normalizeRel(p))) continue;
+        total += st.size;
+        if (total > opts.maxBytes) throw new Error("Pack exceeds maxTransferBytes");
+        entries.push({ name: normalizeRel(p) || path.posix.basename(p), data: await wsl.readFile(p, opts.maxBytes) });
+        continue;
+      }
+      const kids = await wsl.list(p, true);
+      for (const e of kids) {
+        if (e.kind !== "file") continue;
+        if (isDenied(e.rel)) continue;
+        if (e.rel.split("/").some((seg) => SKIP_DIRS.has(seg))) continue;
+        total += e.size;
+        if (total > opts.maxBytes) throw new Error("Pack exceeds maxTransferBytes");
+        entries.push({ name: e.rel, data: await wsl.readFile(e.rel, opts.maxBytes) });
+      }
+    }
+    const zip = zipEntries(entries);
+    res.writeHead(200, {
+      ...cors,
+      "Content-Type": "application/zip",
+      "Content-Length": zip.length,
+      "Content-Disposition": 'attachment; filename="workspace.zip"',
+    });
+    res.end(zip);
+    opts.onTransfer?.({ op: "PACK", path: paths.join(","), ok: true, bytes: zip.length, detail: `${entries.length} files` });
+    return;
+  }
   for (const p of paths) {
     const abs = resolveSafe(opts.workspaceRoot, p);
     const st = await fsp.stat(abs).catch(() => null);
@@ -366,6 +495,20 @@ async function unpackOp(req: http.IncomingMessage, res: http.ServerResponse, opt
   const buf = await readRawBody(req, opts.maxBytes);
   const entries = unzipEntries(buf);
   const written: string[] = [];
+  const wsl = wslIo(opts);
+  if (wsl) {
+    for (const e of entries) {
+      const name = normalizeRel(e.name);
+      if (!name || name.endsWith("/")) continue;
+      if (isDenied(name) || name.includes("..")) continue;
+      const dest = normalizeRel(path.posix.join(normalizeRel(destRel || "."), name));
+      await wsl.writeFile(dest, e.data);
+      written.push(dest);
+    }
+    opts.onTransfer?.({ op: "UNPACK", path: destRel || ".", ok: true, bytes: buf.length, detail: `${written.length} files` });
+    json(res, 200, { ok: true, dest: normalizeRel(destRel || "."), count: written.length, files: written });
+    return;
+  }
   for (const e of entries) {
     const name = normalizeRel(e.name);
     if (!name || name.endsWith("/")) continue;

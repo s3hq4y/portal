@@ -171,6 +171,8 @@ export class BridgeManager {
         routeToken: token,
         maxBytes,
         filesBaseUrl: filesBase,
+        wslDistro: ws.wslDistro,
+        posixRoot: ws.posixRoot,
         onTransfer: (info) => this.recordRequestEnd({
           tool: "file_http",
           ok: info.ok,
