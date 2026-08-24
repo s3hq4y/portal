@@ -33,6 +33,10 @@ export interface SpawnOpts {
   shell?: ShellKind;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** When set on Windows, Linux commands are launched with `wsl.exe -d <distro>`. */
+  wslDistro?: string;
+  /** POSIX working directory passed as `wsl.exe --cd`. */
+  posixCwd?: string;
 }
 
 export type CommandRunner = (
@@ -47,6 +51,7 @@ export interface PreparedCommand {
   args: string[];
   shell: CommandMode;
   displayCommand: string;
+  wslDistro?: string;
 }
 
 // Map user-friendly aliases to a shell kind. Explicit pwsh and bash selections
@@ -75,6 +80,37 @@ function findExecutable(candidates: string[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function findWslExe(): string {
+  const systemRoot = process.env.SystemRoot || "C:\\Windows";
+  return findExecutable([
+    "wsl.exe",
+    path.join(systemRoot, "System32", "wsl.exe"),
+    path.join(systemRoot, "Sysnative", "wsl.exe"),
+  ]) || "wsl.exe";
+}
+
+function isWindowsNativeExecutable(executable: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(executable)
+    || executable.includes("\\")
+    || /\.(exe|bat|cmd|com)$/i.test(executable);
+}
+
+function wantsWindowsShell(explicitShell?: string): boolean {
+  const s = String(explicitShell ?? "").trim().toLowerCase();
+  return s === "cmd" || s === "cmd.exe" || s === "powershell" || s === "powershell.exe"
+    || s === "ps" || s === "pwsh" || s === "powershell-core" || s === "powershell7";
+}
+
+function wrapWithWsl(distro: string, innerExe: string, innerArgs: string[], shell: CommandMode, displayCommand: string): PreparedCommand {
+  return {
+    executable: findWslExe(),
+    args: ["--", innerExe, ...innerArgs],
+    shell,
+    displayCommand,
+    wslDistro: distro,
+  };
 }
 
 /** Resolve a concrete shell executable, including PowerShell 7 and Git Bash on Windows. */
@@ -155,17 +191,28 @@ export function formatCommandDisplay(request: CommandRequest | string): string {
 }
 
 /** Convert a shell command or direct executable+argv request into a spawn invocation. */
-export function prepareCommand(request: CommandRequest | string, explicitShell?: string): PreparedCommand {
+export function prepareCommand(request: CommandRequest | string, explicitShell?: string, wslDistro?: string): PreparedCommand {
   const req: CommandRequest = typeof request === "string" ? { command: request } : request;
   const executable = String(req.executable ?? "").trim();
   const command = String(req.command ?? "").trim();
+  const useWsl = Boolean(wslDistro) && process.platform === "win32" && !wantsWindowsShell(explicitShell);
 
   if (executable) {
     if (command) throw new Error("Provide either command or executable+args, not both.");
     const args = Array.isArray(req.args) ? req.args.map(String) : [];
-    return { executable, args, shell: "direct", displayCommand: formatCommandDisplay({ executable, args }) };
+    const display = formatCommandDisplay({ executable, args });
+    if (useWsl && wslDistro && !isWindowsNativeExecutable(executable)) {
+      return wrapWithWsl(wslDistro, executable, args, "direct", display);
+    }
+    return { executable, args, shell: "direct", displayCommand: display };
   }
   if (!command) throw new Error("command or executable is required");
+
+  if (useWsl && wslDistro) {
+    const shell = resolveShell(explicitShell ?? "sh");
+    const linuxShell = shell === "bash" ? "/bin/bash" : "/bin/sh";
+    return wrapWithWsl(wslDistro, linuxShell, ["-lc", command], shell, command);
+  }
 
   const shell = resolveShell(explicitShell);
   const shellExe = resolveShellExecutable(shell);
@@ -199,9 +246,20 @@ export function prepareCommand(request: CommandRequest | string, explicitShell?:
 }
 
 /** Spawn a prepared command in its own POSIX process group for tree cleanup. */
-export function launchCommand(prepared: PreparedCommand, cwd: string): ChildProcess {
-  return spawn(prepared.executable, prepared.args, {
-    cwd,
+export function launchCommand(prepared: PreparedCommand, cwd: string, posixCwd?: string): ChildProcess {
+  let executable = prepared.executable;
+  let args = prepared.args;
+  let spawnCwd = cwd;
+  if (prepared.wslDistro && process.platform === "win32") {
+    const prefix = ["-d", prepared.wslDistro];
+    if (posixCwd) prefix.push("--cd", posixCwd);
+    args = [...prefix, ...prepared.args];
+    // Do not use the UNC workspace as Win32 cwd for wsl.exe; --cd is the source of truth.
+    spawnCwd = process.env.SystemRoot || "C:\\Windows";
+    executable = prepared.executable;
+  }
+  return spawn(executable, args, {
+    cwd: spawnCwd,
     windowsHide: true,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
@@ -246,9 +304,9 @@ export function spawnCommand(
   maxMs: number,
   hooks?: SpawnOpts,
 ): Promise<SpawnCommandResult> {
-  const prepared = prepareCommand(request, hooks?.shell);
+  const prepared = prepareCommand(request, hooks?.shell, hooks?.wslDistro);
   const startedAt = Date.now();
-  const child = launchCommand(prepared, cwd);
+  const child = launchCommand(prepared, cwd, hooks?.posixCwd);
 
   return new Promise<SpawnCommandResult>((resolve) => {
     const stdoutDecoder = new StringDecoder("utf8");

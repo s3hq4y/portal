@@ -3,8 +3,8 @@
 // mounted by the MCP server rather than registered here.
 
 import { err, ToolCallResult, ToolContext, ToolDescriptor, ToolModule } from "./types";
-import { resolveInWorkspace } from "./workspace";
-import type { CommandRunner } from "./spawn";
+import { hostPathToPosix, resolveInWorkspace } from "./workspace";
+import type { CommandRunner, ShellKind } from "./spawn";
 import { BackgroundCommandRegistry, type BackgroundCommandHooks } from "./background-registry";
 import { runCommand } from "./run-command";
 import { startCommand, readCommand, stopCommand } from "./background-command";
@@ -38,13 +38,25 @@ export class ToolExecutor {
   private readonly ctx: ToolContext;
   private readonly backgroundCommands: BackgroundCommandRegistry;
 
-  constructor(workspaceRoot: string, commandRunner?: CommandRunner, backgroundHooks?: BackgroundCommandHooks) {
+  constructor(
+    workspaceRoot: string,
+    commandRunner?: CommandRunner,
+    backgroundHooks?: BackgroundCommandHooks,
+    env?: { wslDistro?: string; posixRoot?: string; defaultShell?: ShellKind },
+  ) {
     this.backgroundCommands = new BackgroundCommandRegistry(backgroundHooks);
+    const posixRoot = env?.posixRoot;
     this.ctx = {
       workspaceRoot,
       resolve: (p: string) => resolveInWorkspace(workspaceRoot, p),
       commandRunner,
       backgroundCommands: this.backgroundCommands,
+      wslDistro: env?.wslDistro,
+      posixRoot,
+      defaultShell: env?.defaultShell,
+      toPosixCwd: posixRoot
+        ? (abs) => hostPathToPosix(workspaceRoot, posixRoot, abs)
+        : undefined,
     };
   }
 

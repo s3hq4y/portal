@@ -135,7 +135,7 @@ export class AgentTerminalHost implements vscode.Disposable {
     pty?.write(`\n${CYAN}$ ${formatCommandDisplay(request)}${RESET}\n`);
 
     const result = await spawnCommand(request, cwd, maxMs, {
-      shell: opts?.shell,
+      ...opts,
       onStdout: (chunk) => pty?.write(chunk),
       onStderr: (chunk) => pty?.write(`${RED}${chunk}${RESET}`),
     });

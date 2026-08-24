@@ -23,6 +23,7 @@ import {
 } from "./tunnel";
 import { AgentTerminalHost } from "./agent-terminal";
 import { t } from "./nls";
+import { resolveWorkspace, type ResolvedWorkspace } from "./workspace-host";
 
 type StateListener = (s: BridgeState) => void;
 type LogListener = (e: LogEntry) => void;
@@ -49,6 +50,7 @@ export class BridgeManager {
   private statsListeners = new Set<(s: SessionStats) => void>();
   private activitySeq = 0;
   private workspaceRoot: string | undefined;
+  private workspaceInfo: ResolvedWorkspace | undefined;
 
   constructor(
     output: vscode.OutputChannel,
@@ -108,7 +110,12 @@ export class BridgeManager {
     try {
       const folder = vscode.workspace.workspaceFolders?.[0];
       if (!folder) throw new Error(t("err.noWorkspace"));
-      this.workspaceRoot = folder.uri.fsPath;
+      const ws = resolveWorkspace(folder);
+      this.workspaceInfo = ws;
+      this.workspaceRoot = ws.hostRoot;
+      this.log("info", ws.kind === "wsl"
+        ? `workspace ${ws.hostRoot} (WSL ${ws.wslDistro ?? "?"} ${ws.posixRoot ?? ""})`
+        : `workspace ${ws.hostRoot}`);
 
       await this.refreshDiagnostics();
 
@@ -124,13 +131,18 @@ export class BridgeManager {
       // ToolExecutor gets (a) the workspace root and (b) a command runner that
       // mirrors I/O into the 'Portal Agent' terminal.
       const executor = new ToolExecutor(
-        folder.uri.fsPath,
+        ws.hostRoot,
         (request, cwd, maxMs, opts) => this.agentTerm.run(request, cwd, maxMs, opts),
         {
           onStart: (info) => this.agentTerm.backgroundStarted(info),
           onStdout: (commandId, chunk) => this.agentTerm.backgroundStdout(commandId, chunk),
           onStderr: (commandId, chunk) => this.agentTerm.backgroundStderr(commandId, chunk),
           onExit: (info) => this.agentTerm.backgroundExited(info),
+        },
+        {
+          wslDistro: ws.wslDistro,
+          posixRoot: ws.posixRoot,
+          defaultShell: ws.defaultShell,
         },
       );
       this.mcp = new McpHttpServer(executor, { name: "portal", version: "1.0.0" }, {
@@ -155,7 +167,7 @@ export class BridgeManager {
       // Tell the tools about the parallel HTTP file API (file_transfer_info advertises it).
       executor.setTransferInfo({ filesBaseUrl: filesBase, maxTransferBytes: maxBytes });
       this.mcp.setFileHttp({
-        workspaceRoot: folder.uri.fsPath,
+        workspaceRoot: ws.hostRoot,
         routeToken: token,
         maxBytes,
         filesBaseUrl: filesBase,

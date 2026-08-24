@@ -2,7 +2,7 @@
   "name": "portal",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "s9y",
   "private": true,
   "license": "MIT",

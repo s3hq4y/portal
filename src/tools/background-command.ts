@@ -62,10 +62,13 @@ export const startCommand: ToolModule = {
   async handle(ctx, args) {
     if (!ctx.backgroundCommands) throw new Error("Background command support is unavailable.");
     const request = parseCommandRequest(args);
-    const shell = parseShell(args?.shell);
+    const shell = parseShell(args?.shell) ?? ctx.defaultShell;
     const cwd = ctx.resolve(String(args?.cwd ?? "."));
     const maxMs = clampNumber(args?.max_duration_ms, 3_600_000, 1_000, 86_400_000);
-    const info = ctx.backgroundCommands.start(request, cwd, shell, maxMs);
+    const info = ctx.backgroundCommands.start(request, cwd, shell, maxMs, {
+      wslDistro: ctx.wslDistro,
+      posixCwd: ctx.toPosixCwd?.(cwd),
+    });
     return text(JSON.stringify(publicInfo(ctx, info), null, 2));
   },
 };

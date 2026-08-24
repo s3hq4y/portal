@@ -113,7 +113,13 @@ export class BackgroundCommandRegistry {
 
   constructor(private readonly hooks?: BackgroundCommandHooks) {}
 
-  start(request: CommandRequest, cwd: string, shell: ShellKind | undefined, maxDurationMs: number): BackgroundCommandInfo {
+  start(
+    request: CommandRequest,
+    cwd: string,
+    shell: ShellKind | undefined,
+    maxDurationMs: number,
+    target?: { wslDistro?: string; posixCwd?: string },
+  ): BackgroundCommandInfo {
     if (this.disposed) throw new Error("Background command registry is shutting down.");
     this.cleanupExpired();
     const running = [...this.entries.values()].filter((entry) => entry.status === "running").length;
@@ -121,8 +127,8 @@ export class BackgroundCommandRegistry {
       throw new Error(`Background command limit reached (${MAX_CONCURRENT}). Stop or wait for an existing command before starting another.`);
     }
 
-    const prepared = prepareCommand(request, shell);
-    const child = launchCommand(prepared, cwd);
+    const prepared = prepareCommand(request, shell, target?.wslDistro);
+    const child = launchCommand(prepared, cwd, target?.posixCwd);
     const commandId = `cmd-${randomUUID()}`;
     let resolveExit!: () => void;
     const exitPromise = new Promise<void>((resolve) => { resolveExit = resolve; });

@@ -43,7 +43,8 @@ Commands:
 - run_command is foreground, defaults to a 120-second timeout, and returns structured execution metadata.
 - For long-running work use start_command, poll read_command with next_offset values, and always call stop_command when the process is no longer needed.
 - Shell mode accepts command+shell. Direct executable+args mode avoids shell quoting/injection and is preferred when shell syntax is unnecessary.
-- On Windows the default is Windows PowerShell. Select pwsh for PowerShell 7, cmd for cmd.exe, or bash/sh for detected Git Bash. UTF-8 setup is applied automatically.
+- On a local Windows folder the default is Windows PowerShell. Select pwsh for PowerShell 7, cmd for cmd.exe, or bash/sh for detected Git Bash. UTF-8 setup is applied automatically.
+- If the VS Code window is a WSL folder, Portal keeps the tunnel on Windows but maps the workspace to \\\\wsl.localhost\\<distro>\\... and runs default commands with wsl.exe inside that distro. Explicit shell=powershell/cmd still runs on Windows against the UNC path.
 - Use cwd rather than embedding directory changes in command strings.
 
 File transfer:

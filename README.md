@@ -27,7 +27,9 @@ Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your
 | `stop_command` | Stop a background job and its process tree (`force` skips the 2s graceful window). |
 | `file_transfer_info` | Public file-API base URL, size limit, and curl examples. |
 
-**Shells:** `powershell` (Windows default), `pwsh`, `cmd`, `bash` / `sh` (Git Bash when present). UTF-8 is set up automatically.
+**Shells:** `powershell` (Windows default on a local folder), `pwsh`, `cmd`, `bash` / `sh` (Git Bash when present). UTF-8 is set up automatically.
+
+**WSL:** If the window is a WSL folder, Portal still runs on Windows (so the tunnel keeps using Windows ngrok/cloudflared) but binds files to `\\wsl.localhost\<distro>\...` and runs default commands with `wsl.exe` inside that distro. Do not treat `/home/...` as a path on the Windows drive.
 
 **Session:** reuse the `Mcp-Session-Id` from `initialize`. If it is lost or rejected, initialize again — do not invent an ID.
 

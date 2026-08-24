@@ -24,11 +24,15 @@ export const runCommand: ToolModule = {
   },
   async handle(ctx, args) {
     const request = parseCommandRequest(args);
-    const shell = parseShell(args?.shell);
+    const shell = parseShell(args?.shell) ?? ctx.defaultShell;
     const maxMs = clampNumber(args?.max_duration_ms, 120_000, 1_000, 600_000);
     const cwd = ctx.resolve(String(args?.cwd ?? "."));
     const runner = ctx.commandRunner ?? spawnCommand;
-    const result = await runner(request, cwd, maxMs, { shell });
+    const result = await runner(request, cwd, maxMs, {
+      shell,
+      wslDistro: ctx.wslDistro,
+      posixCwd: ctx.toPosixCwd?.(cwd),
+    });
     const metadata = {
       cwd: relToWorkspace(ctx.workspaceRoot, cwd),
       shell: result.shell,

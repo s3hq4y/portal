@@ -24,6 +24,14 @@ export interface ToolContext {
   maxTransferBytes?: number;
   /** When set, tool work must stop once Date.now() reaches this value. */
   deadlineMs?: number;
+  /** Windows+WSL: distro name so commands run via `wsl.exe -d`. */
+  wslDistro?: string;
+  /** POSIX workspace root inside the WSL distro (`/home/atlas`). */
+  posixRoot?: string;
+  /** Default shell when the caller does not pass `shell`. */
+  defaultShell?: import("./spawn").ShellKind;
+  /** Map a host (UNC) absolute path to the POSIX cwd for `wsl.exe --cd`. */
+  toPosixCwd?(absHostPath: string): string | undefined;
 }
 
 export type ToolHandler = (ctx: ToolContext, args: any) => Promise<ToolCallResult>;
