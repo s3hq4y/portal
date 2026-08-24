@@ -150,7 +150,9 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
       if (e.kind !== "file") continue;
       if (isDenied(e.rel)) continue;
       const parts = e.rel.split("/");
-      if (parts.some((seg) => SKIP_DIRS.has(seg))) continue;
+      const parents = parts.slice(0, -1);
+      // Match the local walker: skip SKIP_DIRS and any hidden directory.
+      if (parents.some((seg) => SKIP_DIRS.has(seg) || seg.startsWith("."))) continue;
       if (globPat && globPat !== "**/*" && !simpleGlob(globPat, e.rel)) continue;
       files.push({
         path: e.rel,

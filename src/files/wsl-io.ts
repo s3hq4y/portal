@@ -3,6 +3,9 @@
  *
  * Electron/VS Code often cannot fs.stat `\\wsl.localhost\...` even though a
  * standalone node.exe can. All reads/writes go through `wsl.exe` instead.
+ *
+ * Do not use `bash -lc '... $1'` — a login shell plus `wsl.exe --` drops
+ * positional arguments, which broke PUT (`cat > ""`).
  */
 import { spawn } from "node:child_process";
 import { findWslExecutable } from "../workspace-host";
@@ -42,14 +45,6 @@ export class WslIo {
     return root + "/" + parts.join("/");
   }
 
-  relFromPosix(abs: string): string {
-    const root = (this.posixRoot.replace(/\/+$/, "") || "/") + "/";
-    const n = abs.replace(/\\/g, "/");
-    if (n === root.slice(0, -1)) return "";
-    if (n.startsWith(root)) return n.slice(root.length);
-    return n.replace(/^\/+/, "");
-  }
-
   async stat(rel: string): Promise<WslStat | null> {
     const p = this.resolvePosix(rel);
     const r = await this.exec(["stat", "-c", "%F\t%s\t%Y", "--", p]);
@@ -67,34 +62,32 @@ export class WslIo {
   async readFile(rel: string, maxBytes: number): Promise<Buffer> {
     const p = this.resolvePosix(rel);
     const r = await this.exec(["cat", "--", p], undefined, maxBytes + 1);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || `Failed to read ${rel}`);
+    if (r.code !== 0) throw new Error(cleanWslStderr(r.stderr) || `Failed to read ${rel}`);
     if (r.stdout.length > maxBytes) throw new Error(`File exceeds maxTransferBytes (${maxBytes})`);
     return r.stdout;
   }
 
   async writeFile(rel: string, data: Buffer): Promise<void> {
     const p = this.resolvePosix(rel);
-    const dir = p.replace(/\/[^/]+$/, "") || "/";
-    const mkdir = await this.exec(["mkdir", "-p", "--", dir]);
-    if (mkdir.code !== 0) throw new Error(mkdir.stderr.trim() || `Failed to create ${dir}`);
-    // bash: cat > "$1" with the path as $1 — binary-safe stdin.
-    const r = await this.exec(["bash", "-lc", "cat > \"$1\"", "portal-put", p], data, 1);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || `Failed to write ${rel}`);
+    const quoted = shSingleQuote(p);
+    const script = `mkdir -p -- "$(dirname -- ${quoted})" && cat > ${quoted}`;
+    const r = await this.exec(["sh", "-c", script], data, 4096);
+    if (r.code !== 0) throw new Error(cleanWslStderr(r.stderr) || `Failed to write ${rel}`);
   }
 
   async unlink(rel: string): Promise<void> {
     const p = this.resolvePosix(rel);
     const r = await this.exec(["rm", "-f", "--", p]);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || `Failed to delete ${rel}`);
+    if (r.code !== 0) throw new Error(cleanWslStderr(r.stderr) || `Failed to delete ${rel}`);
   }
 
   async list(relDir: string, recursive: boolean): Promise<WslDirent[]> {
     const p = this.resolvePosix(relDir);
     const fmt = recursive
-      ? ["find", p, "-mindepth", "1", "-printf", "%y\t%s\t%T@\t%P\\n"]
-      : ["find", p, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%T@\t%f\\n"];
+      ? ["find", p, "-mindepth", "1", "-printf", "%y\t%s\t%T@\t%P\n"]
+      : ["find", p, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y\t%s\t%T@\t%f\n"];
     const r = await this.exec(fmt);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || `Failed to list ${relDir}`);
+    if (r.code !== 0) throw new Error(cleanWslStderr(r.stderr) || `Failed to list ${relDir}`);
     const prefix = normalizeListPrefix(relDir);
     const out: WslDirent[] = [];
     for (const line of r.stdout.toString("utf8").split("\n")) {
@@ -151,4 +144,19 @@ export class WslIo {
 
 function normalizeListPrefix(relDir: string): string {
   return String(relDir || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/^\.$/, "");
+}
+
+function shSingleQuote(s: string): string {
+  return "'" + s.replace(/'/g, `'\"'\"'`) + "'";
+}
+
+/** Drop the UTF-16 WSL localhost-forwarding banner so it does not become the error. */
+export function cleanWslStderr(raw: string): string {
+  return raw
+    .replace(/\u0000/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/localhost/i.test(line) && !/^wsl:/i.test(line))
+    .join("\n")
+    .trim();
 }
