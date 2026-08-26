@@ -4,7 +4,8 @@
  *
  * Operations:
  *   GET/HEAD  ?op=info          capability + endpoint listing
- *   GET       ?glob=&path=      list files (JSON with size/mtime)
+ *   GET       ?glob=&path=      list files (JSON with size/mtime; SKIP_DIRS
+ *                               + hidden dirs pruned, hard entry/time caps)
  *   GET/HEAD  /<relpath>        download (Range + sha256 + ETag supported)
  *   PUT       /<relpath>        upload (atomic tmp+rename, size-capped)
  *   DELETE    /<relpath>        delete
@@ -65,7 +66,10 @@ export function isFilesRequest(urlStr: string | undefined, token: string): boole
 
 // Route by method + op; errors map to 400/403/404/405/409.
 export async function handleFilesHttp(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions): Promise<void> {
-  const parsed = parseFilesRequest(req.url || "/", opts.routeToken);
+  // Parse is outside the try below on purpose — but a malformed URL must never
+  // reject the (void-swallowed) promise and leave the request hanging.
+  let parsed: { rel: string; query: URLSearchParams } | null = null;
+  try { parsed = parseFilesRequest(req.url || "/", opts.routeToken); } catch { parsed = null; }
   if (!parsed) { text(res, 404, "Not Found"); return; }
   const op = (parsed.query.get("op") || "").toLowerCase();
   const method = (req.method || "GET").toUpperCase();
@@ -132,9 +136,10 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
 }
 
 // Recursive listing capped at 2000 entries; hidden, SKIP_DIRS and DENY paths
-// are skipped.
+// are skipped, and the walk is bounded in time (see deadlines below).
 async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: string, globPat: string): Promise<void> {
   const wsl = wslIo(opts);
+  const matchFile = compileGlob(globPat);
   if (wsl) {
     const st = await wsl.stat(relDir || ".");
     if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
@@ -153,7 +158,7 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
       const parents = parts.slice(0, -1);
       // Match the local walker: skip SKIP_DIRS and any hidden directory.
       if (parents.some((seg) => SKIP_DIRS.has(seg) || seg.startsWith("."))) continue;
-      if (globPat && globPat !== "**/*" && !simpleGlob(globPat, e.rel)) continue;
+      if (matchFile && !matchFile(e.rel)) continue;
       files.push({
         path: e.rel,
         size: e.size,
@@ -173,11 +178,15 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
     return;
   }
   const files: Array<Record<string, unknown>> = [];
+  // Wall-clock guard: same rationale as the WSL pruned find — a pathological
+  // tree must not occupy the handler forever (the walk stays async, this only
+  // bounds its lifetime).
+  const deadline = Date.now() + 10_000;
   const walk = async (dir: string) => {
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (files.length >= 2000) return;
+      if (files.length >= 2000 || Date.now() > deadline) return;
       const full = path.join(dir, e.name);
       const rel = path.relative(opts.workspaceRoot, full).replace(/\\/g, "/");
       if (isDenied(rel)) continue;
@@ -185,7 +194,7 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
         if (SKIP_DIRS.has(e.name) || e.name.startsWith(".")) continue;
         await walk(full);
       } else if (e.isFile()) {
-        if (globPat && globPat !== "**/*" && !simpleGlob(globPat, rel)) continue;
+        if (matchFile && !matchFile(rel)) continue;
         files.push(await statEntry(opts.workspaceRoot, full));
       }
     }
@@ -205,23 +214,34 @@ async function statEntry(workspaceRoot: string, abs: string): Promise<Record<str
   };
 }
 
-// Same tiny matcher as tools/glob, duplicated to keep the modules independent.
-function simpleGlob(pattern: string, name: string): boolean {
-  // reuse ** / * / ? — same tiny matcher as tools/glob
-  const p = pattern.replace(/\\/g, "/");
-  const n = name.replace(/\\/g, "/");
-  let i = 0, j = 0, star = -1, match = 0;
-  while (i < p.length) {
-    if (p[i] === "*") {
-      if (p[i + 1] === "*") { i += 2; if (i === p.length) return true; }
-      else { star = i++; match = j; continue; }
+// Compile a glob pattern (** / * / ?) into a matcher with standard semantics:
+//   "*"   stays within one path segment
+//   "**"  crosses segments; "**/" also matches zero directories
+//   "?"   one character within a segment
+// Returns null for the match-everything default ("**/*"), and the regex is
+// linear-time — the old backtracking matcher could loop forever on some
+// pattern/name pairs (e.g. "*.md" vs "src/index.ts"), freezing the server.
+function compileGlob(pattern: string): ((rel: string) => boolean) | null {
+  const p = pattern.replace(/\\/g, "/").trim();
+  if (!p || p === "**" || p === "**/*") return null;
+  let re = "";
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === "*") {
+      if (p[i + 1] === "*") {
+        i++;
+        if (p[i + 1] === "/") { i++; re += "(?:.*/)?"; } else { re += ".*"; }
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
     }
-    if (j < n.length && (p[i] === "?" || p[i] === n[j])) { i++; j++; continue; }
-    if (star !== -1) { i = star + 1; j = ++match; continue; }
-    return false;
   }
-  while (i < p.length && p[i] === "*") i++;
-  return i === p.length && j === n.length;
+  const rx = new RegExp("^" + re + "$");
+  return (rel) => rx.test(rel);
 }
 
 // Streamed SHA-256 — returned as X-File-Sha256 and reused as the ETag.

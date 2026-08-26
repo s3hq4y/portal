@@ -24,11 +24,13 @@
   "config.startOnActivation.desc": "VS Code 打开工作区时自动启动 Portal。",
   "config.showCommandsInTerminal.desc": "把 `run_command` 的输入输出镜像到 **Portal Agent** 终端标签页，实时查看 AI 执行的命令。",
   "config.maxTransferBytes.desc": "隧道上 HTTP 文件上传/下载/打包（`/files/<token>`）的最大字节数。默认 64 MiB。",
+  "config.promptTemplates.desc": "预置的提示词模板。复制时文本中的 `{{url}}` 会替换为当前的公开 MCP 地址（确定性提供方在未启动时也会预测）。在 Portal 设置页管理，或通过 **Portal：复制提示词模板** 复制。",
 
   "command.start": "Portal：启动",
   "command.stop": "Portal：停止",
   "command.settings": "Portal：设置",
   "command.copyUrl": "Portal：复制 URL",
+  "command.copyPrompt": "Portal：复制提示词模板",
   "command.checkTunnel": "Portal：检查隧道",
   "command.installCloudflared": "Portal：安装 cloudflared",
   "command.installNgrok": "Portal：安装/升级 ngrok",

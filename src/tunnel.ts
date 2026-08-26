@@ -11,7 +11,8 @@ import { existsSync } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { promisify } from "node:util";
-import { CustomTunnelShell, TunnelProvider } from "./types";
+import { CustomTunnelShell, ErrorAdvice, TunnelProvider } from "./types";
+import { matchKnownError } from "./error-doctor";
 import { t } from "./nls";
 
 const execFileAsync = promisify(execFile);
@@ -19,8 +20,13 @@ const NGROK_API_DEFAULT = 4040;
 const CLOUDFLARED_FALLBACK = "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe";
 const isWin = process.platform === "win32";
 
+// Carries the error-doctor card + raw output so BridgeManager can surface
+// "what happened / how to fix it" instead of an opaque crash.
 export class TunnelError extends Error {
-  constructor(message: string, public readonly provider: TunnelProvider) { super(message); this.name = "TunnelError"; }
+  constructor(message: string, public readonly provider: TunnelProvider,
+              public readonly advice?: ErrorAdvice, public readonly raw?: string) {
+    super(message); this.name = "TunnelError";
+  }
 }
 
 // ---------- detect / install ----------
@@ -107,21 +113,85 @@ export interface RunningTunnel {
 type TunnelChild = ReturnType<typeof spawn> & { stdout: NodeJS.ReadableStream; stderr: NodeJS.ReadableStream };
 
 // Spawn `ngrok http <port> --url <domain>` and wait for the URL in the local API.
+//
+// The agent prints its failures (ERR_NGROK_<code>) to stderr and keeps running
+// in some cases, so output is watched continuously: a recognized error fails
+// startup immediately with an attached solution instead of the old behavior of
+// optimistically adopting the expected URL after a 20s timeout. After a ready
+// tunnel dies unexpectedly, the output tail is forwarded for diagnosis.
 export async function startNgrok(localPort: number, reservedDomain: string, onLog: (s: string) => void): Promise<RunningTunnel> {
   if (!reservedDomain) throw new TunnelError(t("err.ngrokDomainMissing"), "ngrok-reserved");
   const args = ["http", String(localPort), "--url", reservedDomain.replace(/^https?:\/\//i, "")];
   onLog(`[ngrok] starting: ngrok ${args.join(" ")}`);
   const child = spawn("ngrok", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }) as unknown as TunnelChild;
-  child.stdout.on("data", (b: Buffer) => onLog(`[ngrok:out] ${b.toString().trim()}`));
-  child.stderr.on("data", (b: Buffer) => onLog(`[ngrok:err] ${b.toString().trim()}`));
 
-  const publicUrl = await waitForNgrokUrl(reservedDomain, 20_000, onLog);
-  return {
-    provider: "ngrok-reserved",
-    publicUrl,
-    pid: child.pid ?? 0,
-    stop: async () => killProcessTree(child, "ngrok", onLog),
+  let output = "";
+  let ready = false;
+  let settled = false;
+  let stopping = false;
+  let unexpectedListener: ((detail: string) => void) | undefined;
+  let pendingUnexpectedExit: string | undefined;
+  let resolveUrl!: (url: string) => void;
+  let rejectFail!: (error: TunnelError) => void;
+  const urlPromise = new Promise<string>((resolve, reject) => { resolveUrl = resolve; rejectFail = reject; });
+
+  const tail = () => output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-4).join(" | ");
+  const consume = (kind: "out" | "err", b: Buffer) => {
+    const chunk = b.toString();
+    output = (output + chunk).slice(-16_384);
+    onLog(`[ngrok:${kind}] ${chunk.trim()}`);
+    if (settled || ready) return;
+    // ngrok reports startup failures like:
+    //   ERROR:  failed to start tunnel: ... ERR_NGROK_334 ...
+    if (/ERR_NGROK_\d+/.test(output) || /failed to start tunnel/i.test(output)) {
+      settled = true;
+      const code = (output.match(/ERR_NGROK_\d+/) ?? [""])[0];
+      rejectFail(new TunnelError(t("err.ngrokStartFailed", code || tail() || "unknown error"), "ngrok-reserved", matchKnownError(output), output));
+    }
   };
+  child.stdout.on("data", (b: Buffer) => consume("out", b));
+  child.stderr.on("data", (b: Buffer) => consume("err", b));
+  child.once("error", (error: Error) => {
+    if (settled || ready) return;
+    settled = true;
+    rejectFail(new TunnelError(t("err.ngrokStartFailed", error.message), "ngrok-reserved", matchKnownError(error.message)));
+  });
+  child.once("exit", (code, signal) => {
+    if (ready) {
+      if (!stopping) {
+        pendingUnexpectedExit = `exit=${code ?? "null"}${signal ? ` signal=${signal}` : ""} ${tail()}`;
+        unexpectedListener?.(pendingUnexpectedExit);
+      }
+      return;
+    }
+    if (!settled) {
+      settled = true;
+      rejectFail(new TunnelError(t("err.ngrokExited", `exit=${code ?? "null"}${signal ? ` signal=${signal}` : ""} ${tail()}`), "ngrok-reserved", matchKnownError(output), output));
+    }
+  });
+
+  // Happy path: poll the local inspection API for the reserved domain.
+  void waitForNgrokUrl(reservedDomain, 20_000, onLog).then((url) => {
+    if (!settled) { settled = true; ready = true; resolveUrl(url); }
+  }, () => { /* unreachable: waitForNgrokUrl never rejects */ });
+
+  try {
+    const publicUrl = await urlPromise;
+    return {
+      provider: "ngrok-reserved",
+      publicUrl,
+      pid: child.pid ?? 0,
+      stop: async () => { stopping = true; await killProcessTree(child, "ngrok", onLog); },
+      onUnexpectedExit: (listener) => {
+        unexpectedListener = listener;
+        if (pendingUnexpectedExit) queueMicrotask(() => listener(pendingUnexpectedExit!));
+      },
+    };
+  } catch (error) {
+    stopping = true;
+    await killProcessTree(child, "ngrok", onLog);
+    throw error;
+  }
 }
 
 // Poll the local ngrok API until the reserved domain appears; on timeout,
@@ -170,7 +240,7 @@ export async function startCloudflaredQuick(localPort: number, onLog: (s: string
   }
 
   if (!shouldRetryQuickWithHttp2(firstFailure)) {
-    throw new TunnelError(diagnoseQuickFailure(firstFailure.output, firstFailure.sawUrl), "cloudflare-quick");
+    throw cfQuickError(firstFailure.output, firstFailure.sawUrl);
   }
 
   onLog(`[cloudflared] ${t("log.cfQuickHttp2Fallback")}`);
@@ -179,8 +249,16 @@ export async function startCloudflaredQuick(localPort: number, onLog: (s: string
   } catch (error) {
     if (!(error instanceof QuickAttemptError)) throw error;
     const combined = `${firstFailure.output}\n${error.output}`;
-    throw new TunnelError(diagnoseQuickFailure(combined, firstFailure.sawUrl || error.sawUrl), "cloudflare-quick");
+    throw cfQuickError(combined, firstFailure.sawUrl || error.sawUrl);
   }
+}
+
+// Wrap a Quick Tunnel failure: the localized diagnose text doubles as the
+// solution unless the error doctor matched the raw output.
+function cfQuickError(output: string, sawUrl: boolean): TunnelError {
+  const message = diagnoseQuickFailure(output, sawUrl);
+  const advice = matchKnownError(output) ?? { title: t("adv.cfQuick.title"), solution: message };
+  return new TunnelError(message, "cloudflare-quick", advice, output);
 }
 
 async function startCloudflaredQuickAttempt(
@@ -370,12 +448,12 @@ export async function startCloudflaredNamed(
   child.stdout.on("data", (b: Buffer) => consume("out", b));
   child.stderr.on("data", (b: Buffer) => consume("err", b));
   child.once("error", (error: Error) => {
-    if (!ready) rejectReady(new TunnelError(t("err.cfNamedExited", error.message), "cloudflare-named"));
+    if (!ready) rejectReady(new TunnelError(t("err.cfNamedExited", error.message), "cloudflare-named", matchKnownError(output), output));
   });
   child.once("exit", (code, signal) => {
     const detail = `exit=${code ?? "null"}${signal ? ` signal=${signal}` : ""}`;
     if (!ready) {
-      rejectReady(new TunnelError(t("err.cfNamedExited", detail), "cloudflare-named"));
+      rejectReady(new TunnelError(t("err.cfNamedExited", detail), "cloudflare-named", matchKnownError(output), output));
     } else if (!stopping) {
       pendingUnexpectedExit = detail;
       unexpectedListener?.(detail);
@@ -385,7 +463,7 @@ export async function startCloudflaredNamed(
   const timeout = setTimeout(() => {
     if (!ready) {
       const tail = output.split(/\r?\n/).filter(Boolean).slice(-4).join(" | ");
-      rejectReady(new TunnelError(t("err.cfNamedTimeout", tail || t("err.cfNamedNoOutput")), "cloudflare-named"));
+      rejectReady(new TunnelError(t("err.cfNamedTimeout", tail || t("err.cfNamedNoOutput")), "cloudflare-named", matchKnownError(output), output));
     }
   }, 30_000);
 
@@ -546,7 +624,7 @@ export async function startCustomTunnel(
   const fail = (message: string) => {
     if (settled) return;
     settled = true;
-    rejectReady(new TunnelError(t("err.customFailed", message), "custom"));
+    rejectReady(new TunnelError(t("err.customFailed", message), "custom", matchKnownError(`${output}\n${message}`), output));
   };
   const consume = (kind: "out" | "err", b: Buffer) => {
     const chunk = b.toString();

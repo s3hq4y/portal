@@ -8,6 +8,13 @@ Portal is a VS Code extension that exposes the current workspace as a **public M
 
 Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your machine over a tunnel. The agent can run shells and move files.
 
+## What's new in 1.0.2
+
+- **Prompt templates** — pre-author prompts that embed your link: use `{url}` as a placeholder and Portal substitutes the live public MCP URL when the prompt is copied. Manage them in the settings page (Prompts section), copy them from the sidebar quick-copy strip, or run **Portal: Copy Prompt Template**. Providers with a fixed hostname (ngrok reserved / CF named / custom attach) even get the URL predicted while Portal is stopped.
+- **Error doctor** — startup and crash output is scanned for known failures (e.g. ngrok `ERR_NGROK_334` "endpoint already online", authtoken problems, Cloudflare token rejection, busy local ports, missing binaries). Portal shows a **what happened + how to fix it** card in the sidebar and settings page, with a link to the official error page for every `ERR_NGROK_*` code.
+- **Portal logo in the activity bar** — the sidebar icon now uses the portal logo mark (theme-colored).
+- **File API robustness fixes** — a `?glob=` listing can no longer freeze the whole server: WSL recursive listings now prune `node_modules`/`.git`/hidden directories at traversal time and are bounded by a timeout and entry cap; the glob matcher was rewritten (linear-time regex, standard `*` / `**` semantics) after a pathological backtracking loop could hang the handler on some patterns.
+
 ## What you get
 
 | Surface | Role |
@@ -82,6 +89,7 @@ Route token is the secret path segment. MCP lives at `/mcp/<token>`. Leave `port
 
 - **Portal: Start / Stop**
 - **Portal: Copy URL**
+- **Portal: Copy Prompt Template**
 - **Portal: Check Tunnel**
 - **Portal: Settings**
 - **Portal: Install cloudflared** / **Install/Upgrade ngrok**

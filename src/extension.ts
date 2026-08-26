@@ -14,6 +14,7 @@ import { SettingsPage } from "./settings-page";
 import { installStatusBar } from "./status-bar";
 import { readConfig, updateConfig, watchConfig } from "./config";
 import { detectCloudflared, detectNgrok, installCloudflaredViaWinget, installNgrokViaWinget } from "./tunnel";
+import { promptNeedsUrl, promptPreview, renderPrompt } from "./prompts";
 import { t } from "./nls";
 
 let bm: BridgeManager | undefined;
@@ -24,7 +25,7 @@ let settings: SettingsPage | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // Output channel doubles as the extension log; every BridgeManager log line is mirrored here.
   const output = vscode.window.createOutputChannel(t("log.outputChannel"));
-  output.appendLine(`[${new Date().toISOString()}] INFO  ${t("log.activating", "1.0.0")}`);
+  output.appendLine(`[${new Date().toISOString()}] INFO  ${t("log.activating", context.extension.packageJSON?.version ?? "?")}`);
   bm = new BridgeManager(output, context.secrets);
   panel = new SidebarPanel(bm);
   settings = new SettingsPage(bm, context.secrets);
@@ -41,6 +42,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("portal.showAgentTerminal", () => bm!.showAgentTerminal()),
     vscode.commands.registerCommand("portal.checkTunnel", () => bm!.refreshDiagnostics()),
     vscode.commands.registerCommand("portal.copyUrl", async () => { await settings!.copyUrl(); }),
+    // Copy a pre-authored prompt template with {url} substituted by the
+    // current (or deterministic predicted) public MCP URL.
+    vscode.commands.registerCommand("portal.copyPrompt", async () => {
+      const snap = bm!.getPromptSnapshot();
+      if (!snap.templates.length) {
+        vscode.window.showInformationMessage(t("msg.noPrompts", "portal.copyPrompt"));
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        snap.templates.map((tp, i) => ({
+          label: tp.name,
+          detail: promptPreview(renderPrompt(tp.text, snap.url)),
+          idx: i,
+        })),
+        { placeHolder: t("msg.pickPrompt") },
+      );
+      if (!pick) return;
+      const tpl = snap.templates[pick.idx];
+      const text = renderPrompt(tpl.text, snap.url);
+      if (promptNeedsUrl(text)) {
+        vscode.window.showInformationMessage(t("msg.startFirst"));
+        return;
+      }
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage(t("msg.promptCopied", tpl.name));
+    }),
     vscode.commands.registerCommand("portal.installCloudflared", async () => {
       try { await installCloudflaredViaWinget(); vscode.window.showInformationMessage(t("msg.cfInstalled")); }
       catch (e: any) { vscode.window.showErrorMessage(t("msg.installFailed", e?.message ?? e)); }

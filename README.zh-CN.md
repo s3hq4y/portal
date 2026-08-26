@@ -8,6 +8,13 @@ Portal 是一个 VS Code 扩展，把当前工作区暴露成 **公开 MCP 端�
 
 任意 MCP 客户端（Claude、ChatGPT、Cursor、自写 Agent、`curl`）都可以通过隧道连到你的机器：跑 shell、搬文件。
 
+## 1.0.2 新功能
+
+- **提示词模板** —— 预先写好带链接的提示词：文本里用 `{url}` 作占位符，复制时自动替换为当前的公开 MCP 地址。在设置页“提示词”区管理，在侧边栏快捷条一键复制，或运行 **Portal：复制提示词模板**。固定主机名的提供方（ngrok 预留 / CF 命名隧道 / 自定义挂接）在未启动时也能预测出地址。
+- **错误医生（Error doctor）** —— 启动与崩溃输出会被扫描识别已知故障（如 ngrok `ERR_NGROK_334`「端点已在线」、authtoken 问题、Cloudflare Token 被拒、本地端口被占、可执行文件缺失）。Portal 会在侧边栏和设置页显示「发生了什么 + 怎么修」卡片，每个 `ERR_NGROK_*` 错误码都附带官方错误页链接。
+- **侧边栏 Logo 图标** —— 活动栏图标换成 Portal 的 Logo 标识（跟随主题着色）。
+- **文件 API 健壮性修复** —— `?glob=` 列表不再可能卡死整个服务器：WSL 递归列表在遍历时即剪枝 `node_modules`/`.git`/隐藏目录，并加上超时与条目上限；glob 匹配器重写为线性时间正则（标准 `*` / `**` 语义），修复某些模式组合下回溯死循环导致请求永挂的问题。
+
 ## 你会得到什么
 
 | 面 | 作用 |
@@ -82,6 +89,7 @@ curl -fsSL -H "ngrok-skip-browser-warning: 1" \
 
 - **Portal：启动 / 停止**
 - **Portal：复制 URL**
+- **Portal：复制提示词模板**
 - **Portal：检查隧道**
 - **Portal：设置**
 - **Portal：安装 cloudflared** / **安装/升级 ngrok**

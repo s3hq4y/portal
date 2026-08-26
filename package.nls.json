@@ -24,11 +24,13 @@
   "config.startOnActivation.desc": "Start Portal automatically when VS Code opens a workspace.",
   "config.showCommandsInTerminal.desc": "Mirror `run_command` I/O into a **Portal Agent** terminal tab so you can watch AI-run commands live.",
   "config.maxTransferBytes.desc": "Maximum size in bytes for HTTP file upload/download/pack on the tunnel (`/files/<token>`). Default 64 MiB.",
+  "config.promptTemplates.desc": "Pre-authored prompt templates. `{{url}}` inside the text is replaced with the live public MCP URL when the prompt is copied (deterministic providers are even predicted while stopped). Manage them in the Portal settings page or copy via **Portal: Copy Prompt Template**.",
 
   "command.start": "Portal: Start",
   "command.stop": "Portal: Stop",
   "command.settings": "Portal: Settings",
   "command.copyUrl": "Portal: Copy URL",
+  "command.copyPrompt": "Portal: Copy Prompt Template",
   "command.checkTunnel": "Portal: Check Tunnel",
   "command.installCloudflared": "Portal: Install cloudflared",
   "command.installNgrok": "Portal: Install/Upgrade ngrok",

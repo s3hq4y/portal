@@ -9,7 +9,8 @@ import * as vscode from "vscode";
 import { BridgeManager } from "./bridge-manager";
 import { generateRouteToken } from "./mcp-server";
 import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, readConfig, updateConfig } from "./config";
-import { TunnelProvider } from "./types";
+import { writePromptTemplates } from "./prompts";
+import { PromptTemplate, TunnelProvider } from "./types";
 import { localeTag, t, webviewL10nScript } from "./nls";
 
 export class SettingsPage {
@@ -52,7 +53,15 @@ export class SettingsPage {
 
   private async pushConfig(): Promise<void> {
     const cloudflareTunnelTokenSet = Boolean((await this.secrets.get(CLOUDFLARE_TUNNEL_TOKEN_SECRET))?.trim());
-    this.push("config", { config: { ...readConfig(), cloudflareTunnelTokenSet } });
+    const cfg = readConfig();
+    this.push("config", { config: { ...cfg, cloudflareTunnelTokenSet } });
+    this.pushPrompts(cfg.promptTemplates);
+  }
+
+  // Push the template list plus the URL {url} should currently render as.
+  private pushPrompts(templates: PromptTemplate[]): void {
+    const snap = this.bm.getPromptSnapshot();
+    this.push("prompts", { templates: templates ?? snap.templates, url: snap.url });
   }
 
   private push(type: string, payload: Record<string, unknown>): void {
@@ -79,6 +88,9 @@ export class SettingsPage {
       case "copyText":
         await vscode.env.clipboard.writeText(String(msg.text ?? ""));
         vscode.window.showInformationMessage(t("msg.copied"));
+        break;
+      case "warnStartFirst":
+        vscode.window.showInformationMessage(t("msg.startFirst"));
         break;
       case "openExternal": await vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); break;
       case "setProvider":
@@ -111,6 +123,40 @@ export class SettingsPage {
         await this.bm.refreshDiagnostics();
         break;
       case "setRouteToken": await updateConfig("routeToken", String(msg.token ?? "")); this.refresh(); break;
+      // Prompt template CRUD; copy is handled client-side via copyText.
+      case "addPrompt": {
+        const cfg = readConfig();
+        const tpl = sanitizePromptInput(msg);
+        if (!tpl) break;
+        await writePromptTemplates([...cfg.promptTemplates, tpl]);
+        vscode.window.showInformationMessage(t("msg.promptSaved"));
+        this.refresh();
+        break;
+      }
+      case "updatePrompt": {
+        const cfg = readConfig();
+        const tpl = sanitizePromptInput(msg);
+        if (!tpl) break;
+        const idx = Number(msg.index);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= cfg.promptTemplates.length) break;
+        const next = cfg.promptTemplates.slice();
+        next[idx] = tpl;
+        await writePromptTemplates(next);
+        vscode.window.showInformationMessage(t("msg.promptSaved"));
+        this.refresh();
+        break;
+      }
+      case "deletePrompt": {
+        const cfg = readConfig();
+        const idx = Number(msg.index);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= cfg.promptTemplates.length) break;
+        const next = cfg.promptTemplates.slice();
+        const [removed] = next.splice(idx, 1);
+        await writePromptTemplates(next);
+        vscode.window.showInformationMessage(t("msg.promptDeleted", removed?.name ?? ""));
+        this.refresh();
+        break;
+      }
       case "setLocalPort": await updateConfig("localPort", Math.max(0, Number(msg.port) || 0)); this.refresh(); break;
       case "setStartOnActivation": await updateConfig("startOnActivation", !!msg.value); this.refresh(); break;
       case "setShowCommandsInTerminal": await updateConfig("showCommandsInTerminal", !!msg.value); this.refresh(); break;
@@ -141,6 +187,14 @@ export class SettingsPage {
       vscode.window.showInformationMessage(t("msg.startFirst"));
     }
   }
+}
+
+// Validate a prompt add/update message into a clean template (or undefined).
+function sanitizePromptInput(msg: any): PromptTemplate | undefined {
+  const name = String(msg?.name ?? "").trim().slice(0, 60);
+  const text = String(msg?.text ?? "").trim().slice(0, 4000);
+  if (!text) return undefined;
+  return { name: name || text.replace(/\s+/g, " ").slice(0, 24), text };
 }
 
 function renderHtml(): string {
@@ -232,6 +286,25 @@ function renderHtml(): string {
   pre.log { background: var(--input); padding: 8px 10px; max-height: 180px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family, Consolas, monospace); }
   label.check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
   input[type=checkbox] { accent-color: var(--win-accent); }
+
+  /* Error-advice card: what happened + how to fix it */
+  .advice { display: none; border: 1px solid var(--win-err); border-left: 3px solid var(--win-err); background: rgba(232,17,35,0.08); padding: 9px 11px; margin-top: 8px; font-size: 12px; }
+  .advice.show { display: block; }
+  .advice .advice-code { display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; color: #fff; background: var(--win-err); padding: 1px 6px; margin-right: 6px; vertical-align: 1px; }
+  .advice .advice-title { font-weight: 600; color: var(--win-err); margin-bottom: 4px; }
+  .advice .advice-sol { white-space: pre-wrap; word-break: break-word; }
+  .advice .advice-sol b { color: var(--fg); }
+  .advice a { color: var(--win-accent); text-decoration: none; }
+  .advice a:hover { text-decoration: underline; }
+
+  /* Prompt templates */
+  .tpl { border: 1px solid var(--border); padding: 8px 10px; margin-bottom: 6px; background: var(--bg); }
+  .tpl .tpl-head { display: flex; align-items: center; gap: 6px; }
+  .tpl .tpl-name { font-weight: 600; font-size: 12.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tpl .tpl-urltag { flex: none; font-size: 10px; color: var(--win-ok); border: 1px solid var(--win-ok); padding: 0 5px; }
+  .tpl .tpl-urltag.nourl { color: var(--win-warn); border-color: var(--win-warn); }
+  .tpl .tpl-preview { color: var(--muted); font-size: 11.5px; margin-top: 4px; white-space: pre-wrap; word-break: break-word; max-height: 66px; overflow: hidden; }
+  .tpl .row button { flex: none; }
 </style>
 </head>
 <body>
@@ -249,6 +322,14 @@ function renderHtml(): string {
       <button id="stopBtn" class="danger">${t("settings.stop")}</button>
     </div>
     <div class="hint">${t("settings.hintShare")}</div>
+    <div class="advice" id="adviceBox">
+      <div class="advice-title"><span class="advice-code" id="adviceCode" style="display:none;"></span><span id="adviceTitle"></span></div>
+      <div class="advice-sol"><b>${t("advice.solution")}:</b> <span id="adviceSol"></span></div>
+      <div class="row" style="margin-top:6px;">
+        <a id="adviceLink" href="#" style="flex:none; display:none;">${t("advice.openDocs")} &#8599;</a>
+        <button id="adviceCopy" class="small" style="flex:none;">${t("advice.copySolution")}</button>
+      </div>
+    </div>
   </div>
 
   <h2>${t("settings.section.connection")}</h2>
@@ -305,6 +386,20 @@ function renderHtml(): string {
     </div>
   </div>
 
+  <h2>${t("prompt.sectionTitle")}</h2>
+  <div class="card">
+    <div class="small muted">${t("prompt.hint")}</div>
+    <div id="promptList" style="margin-top:8px;"></div>
+    <div class="label">${t("prompt.nameLabel")}</div>
+    <input id="promptName" type="text" maxlength="60" placeholder="${t("prompt.namePlaceholder")}" />
+    <div class="label">${t("prompt.templateLabel")}</div>
+    <textarea id="promptText" placeholder="${t("prompt.templatePlaceholder")}"></textarea>
+    <div class="row" style="margin-top:8px;">
+      <button id="promptSave" class="primary small" style="flex:none;">${t("prompt.add")}</button>
+      <button id="promptCancel" class="small" style="flex:none; display:none;">${t("prompt.cancel")}</button>
+    </div>
+  </div>
+
   <h2>${t("settings.section.tools")}</h2>
   <div class="card">
     <div class="small muted">${t("settings.toolsHint")}</div>
@@ -329,6 +424,12 @@ function renderHtml(): string {
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     let state = { kind: 'idle' };
     let latestConfig = null;
+    let promptsData = { templates: [], url: undefined };
+    let editingIdx = -1;
+
+    // Replace {url} with the live URL; keep the token visible when unknown.
+    const renderTpl = (text, url) => url ? text.replace(/\\{url\\}/gi, url) : text;
+    const needsUrl = (text) => /\\{url\\}/i.test(text);
 
     const PROVIDERS = [
       { id: 'ngrok-reserved', name: t('provider.ngrok-reserved.name'), desc: t('provider.ngrok-reserved.desc') },
@@ -387,7 +488,79 @@ function renderHtml(): string {
       $('startBtn').disabled = (s.kind === 'starting' || s.kind === 'running');
       $('stopBtn').disabled = (s.kind !== 'running' && s.kind !== 'error');
       $('sessionState').textContent = kindLabel(s.kind);
+      renderAdvice(s);
       if (latestConfig) renderProviders(latestConfig.tunnelProvider, latestConfig);
+    }
+
+    // Error doctor: show a "what happened / how to fix it" card when Portal
+    // recognized the failure.
+    let lastAdvice = null;
+    function renderAdvice(s) {
+      const box = $('adviceBox');
+      lastAdvice = (s && s.kind === 'error' && s.advice) ? s.advice : null;
+      box.className = 'advice' + (lastAdvice ? ' show' : '');
+      if (!lastAdvice) return;
+      $('adviceCode').style.display = lastAdvice.code ? '' : 'none';
+      $('adviceCode').textContent = lastAdvice.code || '';
+      $('adviceTitle').textContent = lastAdvice.title || '';
+      $('adviceSol').textContent = lastAdvice.solution || '';
+      const link = $('adviceLink');
+      if (lastAdvice.link) {
+        link.style.display = '';
+        link.textContent = t('advice.openDocs') + ' \\u2197';
+        link.href = lastAdvice.link;
+      } else {
+        link.style.display = 'none';
+      }
+    }
+
+    function renderPrompts() {
+      const list = $('promptList'); list.innerHTML = '';
+      if (!promptsData.templates.length) {
+        list.innerHTML = '<div class="small muted">' + esc(t('prompt.empty')) + '</div>';
+      }
+      promptsData.templates.forEach((tpl, i) => {
+        const div = document.createElement('div');
+        div.className = 'tpl';
+        const preview = renderTpl(tpl.text, promptsData.url);
+        div.innerHTML =
+          '<div class="tpl-head">' +
+            '<span class="tpl-name">' + esc(tpl.name) + '</span>' +
+            '<span class="tpl-urltag' + (promptsData.url ? '' : ' nourl') + '" title="' + esc(needsUrl(tpl.text) ? t('prompt.needsUrl') : t('prompt.staticTip')) + '">' +
+              esc(needsUrl(tpl.text) ? (promptsData.url ? '{url}\\u2192\\u2713' : '{url}?') : '\\u2014') + '</span>' +
+            '<button class="small" data-act="copy">' + esc(t('prompt.copy')) + '</button>' +
+            '<button class="small" data-act="edit">' + esc(t('prompt.edit')) + '</button>' +
+            '<button class="small danger" data-act="del">' + esc(t('prompt.delete')) + '</button>' +
+          '</div>' +
+          '<div class="tpl-preview">' + esc(preview.length > 240 ? preview.slice(0, 239) + '\\u2026' : preview) + '</div>';
+        div.querySelector('[data-act=copy]').addEventListener('click', () => {
+          if (needsUrl(tpl.text) && !promptsData.url) { vscode.postMessage({ type: 'warnStartFirst' }); return; }
+          vscode.postMessage({ type: 'copyText', text: renderTpl(tpl.text, promptsData.url) });
+        });
+        div.querySelector('[data-act=edit]').addEventListener('click', () => startEdit(i));
+        div.querySelector('[data-act=del]').addEventListener('click', () => {
+          vscode.postMessage({ type: 'deletePrompt', index: i });
+          if (editingIdx === i) resetPromptForm();
+        });
+        list.appendChild(div);
+      });
+    }
+
+    function startEdit(i) {
+      editingIdx = i;
+      const tpl = promptsData.templates[i];
+      $('promptName').value = tpl.name;
+      $('promptText').value = tpl.text;
+      $('promptSave').textContent = t('prompt.update');
+      $('promptCancel').style.display = '';
+      $('promptName').focus();
+    }
+    function resetPromptForm() {
+      editingIdx = -1;
+      $('promptName').value = '';
+      $('promptText').value = '';
+      $('promptSave').textContent = t('prompt.add');
+      $('promptCancel').style.display = 'none';
     }
 
     function setDiag(d) {
@@ -439,6 +612,24 @@ function renderHtml(): string {
     $('resetRouteToken').addEventListener('click', () => vscode.postMessage({ type: 'resetRouteToken' }));
     $('showLog').addEventListener('click', () => vscode.postMessage({ type: 'showLog' }));
     $('openSettingsJson').addEventListener('click', () => vscode.postMessage({ type: 'openSettingsJson' }));
+    $('promptSave').addEventListener('click', () => {
+      const name = $('promptName').value.trim();
+      const text = $('promptText').value.trim();
+      if (!text) return;
+      if (editingIdx >= 0) vscode.postMessage({ type: 'updatePrompt', index: editingIdx, name, text });
+      else vscode.postMessage({ type: 'addPrompt', name, text });
+      resetPromptForm();
+    });
+    $('promptCancel').addEventListener('click', resetPromptForm);
+    $('adviceCopy').addEventListener('click', () => {
+      if (!lastAdvice) return;
+      const text = (lastAdvice.code ? lastAdvice.code + '\\n' : '') + (lastAdvice.title || '') + '\\n' + (lastAdvice.solution || '') + (lastAdvice.link ? '\\n' + lastAdvice.link : '');
+      vscode.postMessage({ type: 'copyText', text });
+    });
+    $('adviceLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      if (lastAdvice && lastAdvice.link) vscode.postMessage({ type: 'openExternal', url: lastAdvice.link });
+    });
 
     window.addEventListener('message', (e) => {
       const m = e.data; if (!m) return;
@@ -447,6 +638,7 @@ function renderHtml(): string {
       if (m.type === 'diag') setDiag(m.diag);
       if (m.type === 'logs') setLogs(m.logs);
       if (m.type === 'tools') setTools(m.tools);
+      if (m.type === 'prompts') { promptsData = { templates: m.templates || [], url: m.url }; renderPrompts(); }
     });
     vscode.postMessage({ type: 'webviewReady' });
   </script>

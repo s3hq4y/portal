@@ -4,3 +4,4 @@ out/
 *.vsix
 *.zip
 npm-debug.log*
+.vscode/

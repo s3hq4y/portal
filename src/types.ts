@@ -1,6 +1,20 @@
 /** Shared domain types for the whole extension (state machine, diagnostics, UI models). */
 export type TunnelProvider = "ngrok-reserved" | "cloudflare-quick" | "cloudflare-named" | "custom";
 
+// A recognized failure with an actionable, localized fix (see error-doctor.ts).
+export interface ErrorAdvice {
+  code?: string;
+  title: string;
+  solution: string;
+  link?: string;
+}
+
+// A user-authored prompt preset; {url} receives the public MCP URL at copy time.
+export interface PromptTemplate {
+  name: string;
+  text: string;
+}
+
 // Shell flavors available to the custom tunnel command runner.
 export type CustomTunnelShell = "default" | "powershell" | "pwsh" | "cmd" | "bash";
 
@@ -9,7 +23,7 @@ export type BridgeState =
   | { kind: "idle" }
   | { kind: "starting"; since: number; provider: TunnelProvider }
   | { kind: "running"; since: number; provider: TunnelProvider; publicUrl: string; localPort: number; routeToken?: string; tunnelPid?: number }
-  | { kind: "error"; since: number; provider?: TunnelProvider; message: string };
+  | { kind: "error"; since: number; provider?: TunnelProvider; message: string; advice?: ErrorAdvice };
 
 // Result of probing the local machine for tunnel binaries + their config validity.
 export interface TunnelDiagnostics {

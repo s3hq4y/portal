@@ -25,7 +25,8 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
     this.disposables.push(
-      this.bm.onState(() => this.push("state", { state: this.bm.getState() })),
+      // State changes also re-push prompts: the embedded {url} follows the session.
+      this.bm.onState(() => { this.push("state", { state: this.bm.getState() }); this.pushPrompts(); }),
       this.bm.onActivity(() => this.push("activity", { items: this.bm.getActivities() })),
       this.bm.onStats(() => this.push("stats", { stats: this.bm.getStats() })),
       webviewView.webview.onDidReceiveMessage((m) => this.handle(m)),
@@ -43,10 +44,15 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
     if (this.view && this.ready) this.view.webview.postMessage({ type, ...payload });
   }
 
+  private pushPrompts(): void {
+    this.push("prompts", this.bm.getPromptSnapshot());
+  }
+
   private pushAll(): void {
     this.push("state", { state: this.bm.getState() });
     this.push("activity", { items: this.bm.getActivities() });
     this.push("stats", { stats: this.bm.getStats() });
+    this.pushPrompts();
   }
 
   // Messages from the webview: ready handshake + button clicks.
@@ -56,6 +62,12 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
       case "start": await this.bm.start(); break;
       case "stop": await this.bm.stop(); break;
       case "openSettings": await vscode.commands.executeCommand("portal.showPanel"); break;
+      case "copyText":
+        await vscode.env.clipboard.writeText(String(msg.text ?? ""));
+        vscode.window.showInformationMessage(t("msg.copied"));
+        break;
+      case "warnStartFirst": vscode.window.showInformationMessage(t("msg.startFirst")); break;
+      case "openExternal": await vscode.env.openExternal(vscode.Uri.parse(String(msg.url))); break;
     }
   }
 }
@@ -142,11 +154,27 @@ function renderHtml(): string {
   .stat .v { font-size: 14px; font-weight: 600; margin-top: 1px; font-variant-numeric: tabular-nums; }
 
   .footer { padding: 6px 10px; border-top: 1px solid var(--border); font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; background: var(--card); }
+
+  /* Error-advice card — what happened + how to fix it */
+  .advice { display: none; margin: 0 10px 8px; border: 1px solid var(--win-err); border-left: 3px solid var(--win-err); background: rgba(232,17,35,0.08); padding: 8px 10px; font-size: 11.5px; flex: none; }
+  .advice.show { display: block; }
+  .advice .advice-code { display: inline-block; font-size: 9.5px; font-weight: 600; letter-spacing: 0.05em; color: #fff; background: var(--win-err); padding: 0 5px; margin-right: 5px; vertical-align: 1px; }
+  .advice .advice-title { font-weight: 600; color: var(--win-err); margin-bottom: 3px; word-break: break-word; }
+  .advice .advice-sol { color: var(--fg); white-space: pre-wrap; word-break: break-word; max-height: 96px; overflow-y: auto; }
+  .advice a { color: var(--win-accent); text-decoration: none; }
+  .advice a:hover { text-decoration: underline; }
+
+  /* Prompt quick-copy strip */
+  .promptbar { display: none; gap: 6px; align-items: center; padding: 0 10px 8px; flex: none; }
+  .promptbar.show { display: flex; }
+  .psel { flex: 1; min-width: 0; background: var(--input); color: var(--fg); border: 1px solid var(--border); padding: 3px 4px; font: inherit; font-size: 11.5px; }
+  .psel:focus { outline: none; border-color: var(--win-accent); }
+  .promptbar .icon-btn { border: 1px solid var(--border); width: 24px; height: 24px; }
 </style>
 </head>
 <body>
   <div class="header">
-    <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v4a6 6 0 0 1 6 6h4"/><path d="M15 21v-4a6 6 0 0 1-6-6H5"/><rect x="3" y="3" width="4" height="4"/><rect x="17" y="17" width="4" height="4"/></svg></span>
+    <span class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.25 18.75V5.25h11.44v13.5H15V7.03H6.94v11.72Z"/><path d="M9.09 8.91h1.5v2.25h2.25V8.91h1.5v2.25h1.13v3.93h-2.63v2.81h-2.25v-2.81H7.97v-3.93h1.12Z"/></svg></span>
     <span class="title">PORTAL</span>
     <span class="led" id="statusDot"></span>
     <span class="status" id="statusText">${t("sidebar.idle")}</span>
@@ -156,7 +184,21 @@ function renderHtml(): string {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16"/><path d="M4 9h16M9 4v16"/></svg>
     </button>
   </div>
+  <div class="advice" id="adviceBox">
+    <div class="advice-title"><span class="advice-code" id="adviceCode" style="display:none;"></span><span id="adviceTitle"></span></div>
+    <div class="advice-sol" id="adviceSol"></div>
+    <div style="display:flex; gap:6px; margin-top:6px; align-items:center;">
+      <a id="adviceLink" href="#" style="display:none;">${t("advice.openDocs")} &#8599;</a>
+      <button class="btn" id="adviceCopy" style="padding:2px 8px; font-size:10.5px;">${t("advice.copySolution")}</button>
+    </div>
+  </div>
   <div class="feed" id="feed"><div class="empty">${t("sidebar.empty")}</div></div>
+  <div class="promptbar" id="promptBar">
+    <select class="psel" id="promptSel" title="${t("prompt.copyTip")}"></select>
+    <button class="icon-btn" id="promptCopy" title="${t("prompt.copyTip")}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/></svg>
+    </button>
+  </div>
   <div class="session">
     <div class="head">
       <span class="led" id="connDot"></span><b>${t("sidebar.session")}</b>
@@ -178,6 +220,11 @@ function renderHtml(): string {
     const $ = (id) => document.getElementById(id);
     let state = { kind: 'idle' };
     let stats = { connected: false, toolCalls: 0, failures: 0, totalResponseMs: 0, activeRequests: 0, protocol: 'Streamable HTTP' };
+    let promptsData = { templates: [], url: undefined };
+    let lastAdvice = null;
+
+    const renderTpl = (text, url) => url ? text.replace(/\\{url\\}/gi, url) : text;
+    const needsUrl = (text) => /\\{url\\}/i.test(text);
 
     const ICONS = {
       run_command: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="4.5" width="19" height="15"/><polyline points="6.5 9 10.5 12 6.5 15"/><line x1="12.5" y1="15" x2="17.5" y2="15"/></svg>',
@@ -204,6 +251,42 @@ function renderHtml(): string {
       btn.textContent = running ? t('sidebar.stop') : t('sidebar.start');
       btn.className = 'btn ' + (running ? 'danger' : 'primary');
       renderConn();
+      renderAdvice(s);
+    }
+    // Error-doctor card, shown between the header and the feed on failure.
+    function renderAdvice(s) {
+      lastAdvice = (s && s.kind === 'error' && s.advice) ? s.advice : null;
+      const box = $('adviceBox');
+      box.className = 'advice' + (lastAdvice ? ' show' : '');
+      if (!lastAdvice) return;
+      $('adviceCode').style.display = lastAdvice.code ? '' : 'none';
+      $('adviceCode').textContent = lastAdvice.code || '';
+      $('adviceTitle').textContent = lastAdvice.title || '';
+      $('adviceSol').textContent = (t('advice.solution') + ': ' + (lastAdvice.solution || ''));
+      const link = $('adviceLink');
+      if (lastAdvice.link) {
+        link.style.display = '';
+        link.href = lastAdvice.link;
+      } else link.style.display = 'none';
+    }
+    // Quick-copy strip: select a template, one click copies it with the live URL.
+    function renderPrompts() {
+      const bar = $('promptBar');
+      const sel = $('promptSel');
+      if (!promptsData.templates.length) { bar.className = 'promptbar'; sel.innerHTML = ''; return; }
+      bar.className = 'promptbar show';
+      const prev = sel.selectedIndex;
+      sel.innerHTML = promptsData.templates.map((tpl) => {
+        const flag = needsUrl(tpl.text) && !promptsData.url ? ' \\u26a0' : '';
+        return '<option value="' + esc(tpl.name) + '">' + esc(tpl.name + flag) + '</option>';
+      }).join('');
+      if (prev >= 0 && prev < sel.options.length) sel.selectedIndex = prev;
+    }
+    function copySelectedPrompt() {
+      const tpl = promptsData.templates[$('promptSel').selectedIndex];
+      if (!tpl) return;
+      if (needsUrl(tpl.text) && !promptsData.url) { vscode.postMessage({ type: 'warnStartFirst' }); return; }
+      vscode.postMessage({ type: 'copyText', text: renderTpl(tpl.text, promptsData.url) });
     }
     function renderActivity(items) {
       const feed = $('feed');
@@ -246,11 +329,22 @@ function renderHtml(): string {
       const running = state.kind === 'running' || state.kind === 'starting';
       vscode.postMessage({ type: running ? 'stop' : 'start' });
     });
+    $('promptCopy').addEventListener('click', copySelectedPrompt);
+    $('adviceCopy').addEventListener('click', () => {
+      if (!lastAdvice) return;
+      const text = (lastAdvice.code ? lastAdvice.code + '\\n' : '') + (lastAdvice.title || '') + '\\n' + (lastAdvice.solution || '') + (lastAdvice.link ? '\\n' + lastAdvice.link : '');
+      vscode.postMessage({ type: 'copyText', text });
+    });
+    $('adviceLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      if (lastAdvice && lastAdvice.link) vscode.postMessage({ type: 'openExternal', url: lastAdvice.link });
+    });
     window.addEventListener('message', (e) => {
       const m = e.data; if (!m) return;
       if (m.type === 'state') renderState(m.state);
       if (m.type === 'activity') renderActivity(m.items);
       if (m.type === 'stats') renderStats(m.stats);
+      if (m.type === 'prompts') { promptsData = { templates: m.templates || [], url: m.url }; renderPrompts(); }
     });
     setInterval(renderFooter, 1000);
     vscode.postMessage({ type: 'webviewReady' });

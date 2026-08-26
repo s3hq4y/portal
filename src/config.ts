@@ -4,7 +4,7 @@
  * readConfig() returns a fully-defaulted snapshot; updateConfig() writes one key.
  */
 import * as vscode from "vscode";
-import { CustomTunnelShell, TunnelProvider } from "./types";
+import { CustomTunnelShell, PromptTemplate, TunnelProvider } from "./types";
 
 // Configuration section prefix in settings.json.
 const SECTION = "portal";
@@ -28,6 +28,7 @@ export interface PortalConfig {
   startOnActivation: boolean;
   showCommandsInTerminal: boolean;
   maxTransferBytes: number;
+  promptTemplates: PromptTemplate[];
 }
 
 // Snapshot of the current config with defaults applied and values sanitized.
@@ -48,7 +49,30 @@ export function readConfig(): PortalConfig {
     startOnActivation: c.get<boolean>("startOnActivation", true),
     showCommandsInTerminal: c.get<boolean>("showCommandsInTerminal", true),
     maxTransferBytes: Math.max(1024 * 1024, c.get<number>("maxTransferBytes", 64 * 1024 * 1024)),
+    promptTemplates: sanitizeTemplates(c.get<unknown>("promptTemplates", [])),
   };
+}
+
+// Keep only well-shaped templates: { name, text }; plain strings are accepted
+// from hand-edited settings.json and wrapped with a derived name.
+const PROMPT_NAME_MAX = 60;
+const PROMPT_TEXT_MAX = 4000;
+function sanitizeTemplates(value: unknown): PromptTemplate[] {
+  if (!Array.isArray(value)) return [];
+  const out: PromptTemplate[] = [];
+  for (const raw of value) {
+    if (typeof raw === "string") {
+      const text = raw.trim();
+      if (text) out.push({ name: text.replace(/\s+/g, " ").slice(0, 24), text });
+      continue;
+    }
+    if (raw && typeof raw === "object") {
+      const name = String((raw as any).name ?? "").trim().slice(0, PROMPT_NAME_MAX);
+      const text = String((raw as any).text ?? "").trim().slice(0, PROMPT_TEXT_MAX);
+      if (text) out.push({ name: name || text.replace(/\s+/g, " ").slice(0, 24), text });
+    }
+  }
+  return out;
 }
 
 export async function updateConfig<K extends keyof PortalConfig>(key: K, value: PortalConfig[K], target: vscode.ConfigurationTarget = vscode.ConfigurationTarget.Global): Promise<void> {

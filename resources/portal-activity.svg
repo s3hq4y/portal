@@ -1,5 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <title>Portal</title>
-  <path fill="#C5C5C5" d="M3 22V2h18v20h-3V5H6v17Z"/>
-  <path fill="#C5C5C5" d="M8.5 8h2.5v3h2V8h2.5v3H18v6h-4.5v4h-3v-4H6v-6h2.5Z"/>
+  <!-- Portal logo mark, monochrome: VS Code masks the activity-bar icon with
+       the theme foreground color, so a single fill is intentional. The shape
+       mirrors resources/portal-logo.svg — square portal frame + plug cross. -->
+  <g fill="#C5C5C5">
+    <path d="M5.25 18.75V5.25h11.44v13.5H15V7.03H6.94v11.72Z"/>
+    <path d="M9.09 8.91h1.5v2.25h2.25V8.91h1.5v2.25h1.13v3.93h-2.63v2.81h-2.25v-2.81H7.97v-3.93h1.12Z"/>
+  </g>
 </svg>

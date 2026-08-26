@@ -12,10 +12,12 @@
  * listener sets.
  */
 import * as vscode from "vscode";
-import { ActivityItem, BridgeState, LogEntry, SessionStats, TunnelDiagnostics } from "./types";
+import { ActivityItem, BridgeState, ErrorAdvice, LogEntry, PromptTemplate, SessionStats, TunnelDiagnostics } from "./types";
 import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, PortalConfig, readConfig, updateConfig } from "./config";
 import { generateRouteToken, McpHttpServer } from "./mcp-server";
 import { ToolDescriptor, ToolExecutor } from "./tool-executor";
+import { adviceForError, matchKnownError } from "./error-doctor";
+import { currentPublicUrl } from "./prompts";
 import {
   detectCloudflared, detectNgrok,
   startNgrok, startCloudflaredQuick, startCloudflaredNamed, startCustomTunnel,
@@ -71,6 +73,12 @@ export class BridgeManager {
   getActivities(): readonly ActivityItem[] { return this.activities; }
   getStats(): SessionStats { return this.stats; }
   getExposedTools(): ToolDescriptor[] { return new ToolExecutor(this.workspaceRoot ?? process.cwd()).listTools(); }
+  // Prompt templates plus the URL they should currently embed (running URL or
+  // a deterministic prediction). Consumed by both webviews and copyPrompt.
+  getPromptSnapshot(): { templates: PromptTemplate[]; url?: string } {
+    const cfg = readConfig();
+    return { templates: cfg.promptTemplates, url: currentPublicUrl(cfg, this.state) };
+  }
   onActivity(fn: (a: readonly ActivityItem[]) => void): vscode.Disposable { this.activityListeners.add(fn); fn(this.activities); return { dispose: () => this.activityListeners.delete(fn) }; }
   onStats(fn: (s: SessionStats) => void): vscode.Disposable { this.statsListeners.add(fn); fn(this.stats); return { dispose: () => this.statsListeners.delete(fn) }; }
 
@@ -200,11 +208,22 @@ export class BridgeManager {
       await vscode.commands.executeCommand("setContext", "portal.running", true);
     } catch (e: any) {
       const msg = e?.message ?? String(e);
+      const advice = adviceForError(e);
       this.log("error", t("err.startFailed", msg));
-      this.setState({ kind: "error", since: Date.now(), provider: cfg.tunnelProvider, message: msg });
+      this.logAdvice(advice);
+      this.setState({ kind: "error", since: Date.now(), provider: cfg.tunnelProvider, message: msg, advice });
       await this.cleanupTunnelAndServer();
       await vscode.commands.executeCommand("setContext", "portal.running", false);
     }
+  }
+
+  // Mirror a recognized failure + its fix into the log so it is readable
+  // without opening the sidebar.
+  private logAdvice(advice: ErrorAdvice | undefined): void {
+    if (!advice) return;
+    this.log("warn", `${advice.code ? `${advice.code}: ` : ""}${advice.title}`);
+    this.log("warn", `${t("adv.solutionPrefix")} ${advice.solution}`);
+    if (advice.link) this.log("warn", `${t("adv.docsPrefix")} ${advice.link}`);
   }
 
   async stop(): Promise<void> {
@@ -272,14 +291,16 @@ export class BridgeManager {
     // Ignore an old process exiting after another tunnel has already replaced it.
     if (this.tunnel && this.tunnel !== tunnel) return;
     if (this.state.kind !== "running" && this.state.kind !== "starting") return;
+    const advice = matchKnownError(detail);
     this.log("error", t("err.tunnelExited", detail));
+    this.logAdvice(advice);
     this.tunnel = undefined;
     const mcp = this.mcp;
     this.mcp = undefined;
     mcp?.stop().catch((error: any) => this.log("warn", `mcp.stop: ${error?.message ?? error}`));
     this.stats = { ...this.stats, connected: false, activeRequests: 0 };
     this.emitStats();
-    this.setState({ kind: "error", since: Date.now(), provider: tunnel.provider, message: t("err.tunnelExited", detail) });
+    this.setState({ kind: "error", since: Date.now(), provider: tunnel.provider, message: t("err.tunnelExited", detail), advice });
     vscode.commands.executeCommand("setContext", "portal.running", false).then(undefined, () => {});
   }
 
