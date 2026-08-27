@@ -10,7 +10,7 @@ Portal 是一个 VS Code 扩展，把当前工作区暴露成 **公开 MCP 端�
 
 ## 1.0.3 新功能
 
-- **可配置的 Agent 提示词** —— 新增 `portal.agentInstructions` 设置，用它替换 Portal 在 `initialize` 时返回给 MCP 客户端的提示词。留空则继续使用内置默认提示词。修改后下次启动 Portal 生效。
+- **可配置的 Agent 提示词** —— 新增 `portal.agentInstructions` 设置，用它替换 Portal 在 `initialize` 时返回给 MCP 客户端的提示词。留空则继续使用内置默认提示词。可在 Portal 设置页（Agent 提示词区）或 VS Code 设置中编辑，修改后下次启动 Portal 生效。
 
 ## 你会得到什么
 

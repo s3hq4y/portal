@@ -109,6 +109,7 @@ export const EN = {
   "msg.promptCopied": "Prompt copied: {0}",
   "msg.promptSaved": "Prompt template saved.",
   "msg.promptDeleted": "Prompt template deleted: {0}",
+  "msg.instructionsSaved": "Agent instructions saved.",
 
   "state.idle": "Idle",
   "state.starting": "Starting",
@@ -214,6 +215,11 @@ export const EN = {
   "settings.openVscodeSettings": "Open VS Code settings",
   "settings.settingsHint": "All options live under the portal.* section.",
   "settings.copyInstall": "Copy",
+
+  "settings.section.agentInstructions": "Agent instructions",
+  "settings.agentInstructionsHint": "Returned to MCP clients during `initialize`. Leave empty to use Portal's built-in default instructions. Applies on the next start of Portal.",
+  "settings.agentInstructionsPlaceholder": "Leave empty to use Portal's built-in default instructions.",
+  "settings.saveInstructions": "Save",
 
   "prompt.sectionTitle": "Prompts",
   "prompt.hint": "Pre-author prompts that contain your link: use {url} as the placeholder — it is replaced with the live public MCP URL when copied.",
@@ -342,6 +348,7 @@ export const ZH: Record<MsgKey, string> = {
   "msg.promptCopied": "提示词已复制：{0}",
   "msg.promptSaved": "提示词模板已保存。",
   "msg.promptDeleted": "提示词模板已删除：{0}",
+  "msg.instructionsSaved": "Agent 提示词已保存。",
 
   "state.idle": "空闲",
   "state.starting": "启动中",
@@ -447,6 +454,11 @@ export const ZH: Record<MsgKey, string> = {
   "settings.openVscodeSettings": "打开 VS Code 设置",
   "settings.settingsHint": "全部选项位于 portal.* 配置节。",
   "settings.copyInstall": "复制",
+
+  "settings.section.agentInstructions": "Agent 提示词",
+  "settings.agentInstructionsHint": "在 MCP `initialize` 时返回给客户端/Agent 的提示词。留空则使用 Portal 内置的默认提示词。下次启动 Portal 时生效。",
+  "settings.agentInstructionsPlaceholder": "留空以使用 Portal 内置的默认提示词。",
+  "settings.saveInstructions": "保存",
 
   "prompt.sectionTitle": "提示词",
   "prompt.hint": "预置包含链接的提示词：用 {url} 作占位符，复制时会替换为当前的公开 MCP 地址。",

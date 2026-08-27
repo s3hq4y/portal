@@ -10,7 +10,7 @@ Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your
 
 ## What's new in 1.0.3
 
-- **Configurable agent instructions** — a new `portal.agentInstructions` setting replaces the instructions Portal returns to MCP clients during `initialize`. Leave it empty to keep the built-in default. Changes apply the next time Portal starts.
+- **Configurable agent instructions** — a new `portal.agentInstructions` setting replaces the instructions Portal returns to MCP clients during `initialize`. Leave it empty to keep the built-in default. Edit it from the Portal settings page (Agent instructions section) or VS Code settings. Changes apply the next time Portal starts.
 
 ## What you get
 

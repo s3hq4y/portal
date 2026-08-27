@@ -160,6 +160,11 @@ export class SettingsPage {
       case "setLocalPort": await updateConfig("localPort", Math.max(0, Number(msg.port) || 0)); this.refresh(); break;
       case "setStartOnActivation": await updateConfig("startOnActivation", !!msg.value); this.refresh(); break;
       case "setShowCommandsInTerminal": await updateConfig("showCommandsInTerminal", !!msg.value); this.refresh(); break;
+      case "setAgentInstructions":
+        await updateConfig("agentInstructions", String(msg.value ?? ""));
+        vscode.window.showInformationMessage(t("msg.instructionsSaved"));
+        this.refresh();
+        break;
       case "resetRouteToken": {
         await updateConfig("routeToken", generateRouteToken());
         this.refresh();
@@ -386,6 +391,15 @@ function renderHtml(): string {
     </div>
   </div>
 
+  <h2>${t("settings.section.agentInstructions")}</h2>
+  <div class="card">
+    <div class="small muted">${t("settings.agentInstructionsHint")}</div>
+    <textarea id="agentInstructions" style="margin-top:8px; min-height:160px;" placeholder="${t("settings.agentInstructionsPlaceholder")}"></textarea>
+    <div class="row" style="margin-top:8px;">
+      <button id="saveInstructions" class="primary small" style="flex:none;">${t("settings.saveInstructions")}</button>
+    </div>
+  </div>
+
   <h2>${t("prompt.sectionTitle")}</h2>
   <div class="card">
     <div class="small muted">${t("prompt.hint")}</div>
@@ -471,6 +485,7 @@ function renderHtml(): string {
         $('localPort').value = cfg.localPort || 0;
         $('startOnActivation').checked = !!cfg.startOnActivation;
         $('showCommandsInTerminal').checked = cfg.showCommandsInTerminal !== false;
+        $('agentInstructions').value = cfg.agentInstructions || '';
       }
     }
 
@@ -612,6 +627,7 @@ function renderHtml(): string {
     $('resetRouteToken').addEventListener('click', () => vscode.postMessage({ type: 'resetRouteToken' }));
     $('showLog').addEventListener('click', () => vscode.postMessage({ type: 'showLog' }));
     $('openSettingsJson').addEventListener('click', () => vscode.postMessage({ type: 'openSettingsJson' }));
+    $('saveInstructions').addEventListener('click', () => vscode.postMessage({ type: 'setAgentInstructions', value: $('agentInstructions').value }));
     $('promptSave').addEventListener('click', () => {
       const name = $('promptName').value.trim();
       const text = $('promptText').value.trim();
