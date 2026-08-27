@@ -34,7 +34,7 @@ export function generateRouteToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const SERVER_INSTRUCTIONS = `You are connected to the user's VS Code workspace via Portal, a deliberately minimal MCP server: commands and file transfer only.
+export const DEFAULT_SERVER_INSTRUCTIONS = `You are connected to the user's VS Code workspace via Portal, a deliberately minimal MCP server: commands and file transfer only.
 
 Session:
 - Reuse the Mcp-Session-Id returned by initialize for later requests. If it is lost or rejected, initialize again instead of guessing an ID.
@@ -59,9 +59,16 @@ export class McpHttpServer {
   public port: number = 0;
   private fileHttp: FileHttpOptions | undefined;
 
-  constructor(executor: ToolExecutor, serverInfo: ServerInfo, private readonly hooks?: McpActivityHooks, private readonly routeToken = "") {
+  constructor(executor: ToolExecutor, serverInfo: ServerInfo, private readonly hooks?: McpActivityHooks, private readonly routeToken = "", private readonly customInstructions = "") {
     this.executor = executor;
     this.serverInfo = serverInfo;
+  }
+
+  // Resolve the agent instructions returned on initialize: a non-empty
+  // `portal.agentInstructions` setting wins, otherwise the built-in default.
+  private effectiveInstructions(): string {
+    const custom = this.customInstructions.trim();
+    return custom ? custom : DEFAULT_SERVER_INSTRUCTIONS;
   }
 
   setFileHttp(opts: FileHttpOptions): void {
@@ -197,7 +204,7 @@ export class McpHttpServer {
               tools: { listChanged: false },
               resources: { subscribe: false, listChanged: false },
             },
-            instructions: SERVER_INSTRUCTIONS + (appendices.length ? `\n\n${appendices.join("\n\n")}` : ""),
+            instructions: this.effectiveInstructions() + (appendices.length ? `\n\n${appendices.join("\n\n")}` : ""),
           },
         };
       }

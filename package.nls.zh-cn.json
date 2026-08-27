@@ -26,6 +26,8 @@
   "config.maxTransferBytes.desc": "隧道上 HTTP 文件上传/下载/打包（`/files/<token>`）的最大字节数。默认 64 MiB。",
   "config.promptTemplates.desc": "预置的提示词模板。复制时文本中的 `{{url}}` 会替换为当前的公开 MCP 地址（确定性提供方在未启动时也会预测）。在 Portal 设置页管理，或通过 **Portal：复制提示词模板** 复制。",
 
+  "config.agentInstructions.desc": "在 MCP `initialize` 时返回给客户端/Agent 的提示词。留空则使用 Portal 内置的默认提示词。下次启动 Portal 时生效。",
+
   "command.start": "Portal：启动",
   "command.stop": "Portal：停止",
   "command.settings": "Portal：设置",

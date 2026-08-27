@@ -157,7 +157,7 @@ export class BridgeManager {
         onSessionCreated: () => this.recordSessionConnected(),
         onRequestStart: () => this.recordRequestStart(),
         onRequestEnd: (info) => this.recordRequestEnd(info),
-      }, token);
+      }, token, cfg.agentInstructions);
       // Bind the MCP server locally; port 0 = OS-assigned free port.
       const port = await this.mcp.start(cfg.localPort || 0);
       this.log("info", t("log.mcpListening", String(port)));

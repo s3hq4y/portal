@@ -29,6 +29,7 @@ export interface PortalConfig {
   showCommandsInTerminal: boolean;
   maxTransferBytes: number;
   promptTemplates: PromptTemplate[];
+  agentInstructions: string;
 }
 
 // Snapshot of the current config with defaults applied and values sanitized.
@@ -50,6 +51,7 @@ export function readConfig(): PortalConfig {
     showCommandsInTerminal: c.get<boolean>("showCommandsInTerminal", true),
     maxTransferBytes: Math.max(1024 * 1024, c.get<number>("maxTransferBytes", 64 * 1024 * 1024)),
     promptTemplates: sanitizeTemplates(c.get<unknown>("promptTemplates", [])),
+    agentInstructions: (c.get<string>("agentInstructions", "") ?? "").trim(),
   };
 }
 

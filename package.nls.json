@@ -26,6 +26,8 @@
   "config.maxTransferBytes.desc": "Maximum size in bytes for HTTP file upload/download/pack on the tunnel (`/files/<token>`). Default 64 MiB.",
   "config.promptTemplates.desc": "Pre-authored prompt templates. `{{url}}` inside the text is replaced with the live public MCP URL when the prompt is copied (deterministic providers are even predicted while stopped). Manage them in the Portal settings page or copy via **Portal: Copy Prompt Template**.",
 
+  "config.agentInstructions.desc": "Agent instructions returned to MCP clients during `initialize`. When empty, Portal's built-in default instructions are used. Takes effect the next time Portal starts.",
+
   "command.start": "Portal: Start",
   "command.stop": "Portal: Stop",
   "command.settings": "Portal: Settings",
