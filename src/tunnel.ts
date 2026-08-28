@@ -112,16 +112,17 @@ export interface RunningTunnel {
 
 type TunnelChild = ReturnType<typeof spawn> & { stdout: NodeJS.ReadableStream; stderr: NodeJS.ReadableStream };
 
-// Spawn `ngrok http <port> --url <domain>` and wait for the URL in the local API.
+// Spawn `ngrok http <port> --url <domain>` (optionally with --pooling-enabled) and wait for the URL in the local API.
 //
 // The agent prints its failures (ERR_NGROK_<code>) to stderr and keeps running
 // in some cases, so output is watched continuously: a recognized error fails
 // startup immediately with an attached solution instead of the old behavior of
 // optimistically adopting the expected URL after a 20s timeout. After a ready
 // tunnel dies unexpectedly, the output tail is forwarded for diagnosis.
-export async function startNgrok(localPort: number, reservedDomain: string, onLog: (s: string) => void): Promise<RunningTunnel> {
+export async function startNgrok(localPort: number, reservedDomain: string, poolingEnabled: boolean, onLog: (s: string) => void): Promise<RunningTunnel> {
   if (!reservedDomain) throw new TunnelError(t("err.ngrokDomainMissing"), "ngrok-reserved");
   const args = ["http", String(localPort), "--url", reservedDomain.replace(/^https?:\/\//i, "")];
+  if (poolingEnabled) args.push("--pooling-enabled");
   onLog(`[ngrok] starting: ngrok ${args.join(" ")}`);
   const child = spawn("ngrok", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }) as unknown as TunnelChild;
 

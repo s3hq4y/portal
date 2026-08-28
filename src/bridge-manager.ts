@@ -245,7 +245,7 @@ export class BridgeManager {
         const ng = await detectNgrok();
         if (!ng.installed) throw new Error(ng.lastError ?? t("err.ngrokNotInstalled"));
         if (!ng.configValid) throw new Error(ng.lastError ?? t("err.ngrokAuthInvalid"));
-        return await startNgrok(port, cfg.ngrokDomain, log);
+        return await startNgrok(port, cfg.ngrokDomain, cfg.ngrokPoolingEnabled, log);
       }
       case "custom": {
         if (!cfg.customTunnelCommand.trim() && !cfg.customTunnelUrl.trim()) {

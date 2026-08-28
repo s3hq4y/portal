@@ -18,6 +18,7 @@
   "config.customTunnelReadyPattern.desc": "可选正则；隧道输出还需匹配它之后才视为就绪。",
   "config.customTunnelTimeoutMs.desc": "自定义隧道启动超时（毫秒，最小 5000）。默认 30000。",
   "config.ngrokDomain.desc": "你的 ngrok 预留域名（如 `example.ngrok-free.dev`）。提供方为 ngrok-reserved 时必填。",
+  "config.ngrokPoolingEnabled.desc": "使用 ngrok 预留域名时向 ngrok 传入 `--pooling-enabled`。仅在你有意让多个 Portal/ngrok 会话共用同一域名并由 ngrok 进行负载均衡时启用。",
   "config.cloudflareDomain.desc": "在远程管理的 Cloudflare Tunnel 上配置的公开主机名。命名模式还需要安全保存的 Tunnel Token 和固定本地端口。",
   "config.routeToken.desc": "秘密路径令牌。MCP 端点位于 `/mcp/<token>`。留空则启动时自动生成。",
   "config.localPort.desc": "MCP 服务的本地端口。`0` = 快速/ngrok 模式自动分配；Cloudflare 命名隧道必须使用与其 Origin Service 一致的固定端口。",

@@ -2,7 +2,7 @@
   "name": "portal",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "s9y",
   "private": true,
   "license": "GPL-3.0-or-later",
@@ -71,6 +71,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "%config.ngrokDomain.desc%"
+        },
+        "portal.ngrokPoolingEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%config.ngrokPoolingEnabled.desc%"
         },
         "portal.cloudflareDomain": {
           "type": "string",

@@ -8,10 +8,6 @@ Portal 是一个 VS Code 扩展，把当前工作区暴露成 **公开 MCP 端�
 
 任意 MCP 客户端（Claude、ChatGPT、Cursor、自写 Agent、`curl`）都可以通过隧道连到你的机器：跑 shell、搬文件。
 
-## 1.0.3 新功能
-
-- **可配置的 Agent 提示词** —— 新增 `portal.agentInstructions` 设置，用它替换 Portal 在 `initialize` 时返回给 MCP 客户端的提示词。留空则继续使用内置默认提示词。可在 Portal 设置页（Agent 提示词区）或 VS Code 设置中编辑，修改后下次启动 Portal 生效。
-
 ## 你会得到什么
 
 | 面 | 作用 |
@@ -77,7 +73,7 @@ curl -fsSL -H "ngrok-skip-browser-warning: 1" \
 | --- | --- | --- |
 | `cloudflare-quick`（默认） | 每次启动新的随机 `trycloudflare.com` | 上手快，地址不固定 |
 | `cloudflare-named` | 固定主机名 | 需要安全保存的 Tunnel Token、公开主机名、**固定本地端口** |
-| `ngrok-reserved` | 预留域名（如 `*.ngrok-free.dev`） | 地址稳定 |
+| `ngrok-reserved` | 预留域名（如 `*.ngrok-free.dev`） | 地址稳定；多个 Portal/ngrok 会话有意共用同一预留域名时，可启用 `portal.ngrokPoolingEnabled` |
 | `custom` | 自定义命令或已有 URL | 占位符：`{{port}}` `{{token}}` `{{workspace}}`。命令留空且设置 `customTunnelUrl` = 接入模式 |
 
 路由令牌是路径上的密钥。MCP 挂在 `/mcp/<token>`。`portal.routeToken` 留空则启动时自动生成。
@@ -92,7 +88,7 @@ curl -fsSL -H "ngrok-skip-browser-warning: 1" \
 - **Portal：安装 cloudflared** / **安装/升级 ngrok**
 - **Portal：显示日志** / **显示 Agent 终端**
 
-常用设置：`portal.startOnActivation`（默认开）、`portal.showCommandsInTerminal`、`portal.localPort`（`0` 自动分配；Cloudflare 命名隧道除外）。
+常用设置：`portal.startOnActivation`（默认开）、`portal.showCommandsInTerminal`、`portal.localPort`（`0` 自动分配；Cloudflare 命名隧道除外），以及用于 ngrok 预留域名负载均衡的 `portal.ngrokPoolingEnabled`。
 
 ## 构建
 

@@ -104,6 +104,7 @@ export class SettingsPage {
         await this.bm.refreshDiagnostics();
         break;
       case "setNgrokDomain": await updateConfig("ngrokDomain", String(msg.domain ?? "").trim()); this.refresh(); break;
+      case "setNgrokPoolingEnabled": await updateConfig("ngrokPoolingEnabled", !!msg.value); this.refresh(); break;
       case "setCloudflareDomain": await updateConfig("cloudflareDomain", String(msg.domain ?? "").trim()); this.refresh(); break;
       case "setCustomTunnelCommand": await updateConfig("customTunnelCommand", String(msg.command ?? "").trim()); this.refresh(); break;
       case "setCustomTunnelUrl": await updateConfig("customTunnelUrl", String(msg.url ?? "").trim()); this.refresh(); break;
@@ -344,6 +345,8 @@ function renderHtml(): string {
     <div id="ngrokDomainBox" style="display:none;">
       <div class="label">${t("settings.ngrokDomain")}</div>
       <input id="ngrokDomain" type="text" placeholder="your-name.ngrok-free.dev" />
+      <label class="check" style="margin-top:8px;"><input type="checkbox" id="ngrokPoolingEnabled" />${t("settings.ngrokPoolingEnabled")}</label>
+      <div class="hint">${t("settings.ngrokPoolingHint")}</div>
     </div>
     <div id="cfDomainBox" style="display:none;">
       <div class="label">${t("settings.cfHostname")}</div>
@@ -476,6 +479,7 @@ function renderHtml(): string {
       $('customTunnelBox').style.display = (active === 'custom') ? '' : 'none';
       if (cfg) {
         $('ngrokDomain').value = cfg.ngrokDomain || '';
+        $('ngrokPoolingEnabled').checked = !!cfg.ngrokPoolingEnabled;
         $('cfDomain').value = cfg.cloudflareDomain || '';
         $('customCommand').value = cfg.customTunnelCommand || '';
         $('customUrl').value = cfg.customTunnelUrl || '';
@@ -615,6 +619,7 @@ function renderHtml(): string {
     $('copyUrlBtn').addEventListener('click', () => vscode.postMessage({ type: 'copyUrl' }));
     $('refreshDiag').addEventListener('click', () => vscode.postMessage({ type: 'refreshDiag' }));
     $('ngrokDomain').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokDomain', domain: e.target.value }));
+    $('ngrokPoolingEnabled').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokPoolingEnabled', value: e.target.checked }));
     $('cfDomain').addEventListener('change', (e) => vscode.postMessage({ type: 'setCloudflareDomain', domain: e.target.value }));
     $('customCommand').addEventListener('change', (e) => vscode.postMessage({ type: 'setCustomTunnelCommand', command: e.target.value }));
     $('customUrl').addEventListener('change', (e) => vscode.postMessage({ type: 'setCustomTunnelUrl', url: e.target.value }));

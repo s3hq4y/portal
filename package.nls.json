@@ -18,6 +18,7 @@
   "config.customTunnelReadyPattern.desc": "Optional regex; the custom tunnel is only ready after it also matches the tunnel output.",
   "config.customTunnelTimeoutMs.desc": "Startup timeout for the custom tunnel in milliseconds (minimum 5000). Default 30000.",
   "config.ngrokDomain.desc": "Your reserved ngrok domain (e.g. `example.ngrok-free.dev`). Required when the provider is ngrok-reserved.",
+  "config.ngrokPoolingEnabled.desc": "Pass `--pooling-enabled` to ngrok when using a reserved domain. Enable this only when you intentionally run multiple Portal/ngrok sessions on the same domain and want ngrok to load balance them.",
   "config.cloudflareDomain.desc": "Public hostname configured on a remotely-managed Cloudflare Tunnel. Named mode also requires a securely stored Tunnel token and a fixed local port.",
   "config.routeToken.desc": "Secret path token. The MCP endpoint is served at `/mcp/<token>`. Leave empty to auto-generate on start.",
   "config.localPort.desc": "Local port for the MCP server. `0` = auto for Quick/ngrok; Cloudflare Named Tunnel requires the same fixed port configured as its origin service.",

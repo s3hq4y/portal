@@ -16,6 +16,7 @@ export const CLOUDFLARE_TUNNEL_TOKEN_SECRET = "portal.cloudflareTunnelToken";
 export interface PortalConfig {
   tunnelProvider: TunnelProvider;
   ngrokDomain: string;
+  ngrokPoolingEnabled: boolean;
   cloudflareDomain: string;
   customTunnelCommand: string;
   customTunnelShell: CustomTunnelShell;
@@ -38,6 +39,7 @@ export function readConfig(): PortalConfig {
   return {
     tunnelProvider: c.get<TunnelProvider>("tunnelProvider", "cloudflare-quick"),
     ngrokDomain: (c.get<string>("ngrokDomain") ?? "").trim(),
+    ngrokPoolingEnabled: c.get<boolean>("ngrokPoolingEnabled", false),
     cloudflareDomain: (c.get<string>("cloudflareDomain") ?? "").trim(),
     customTunnelCommand: c.get<string>("customTunnelCommand", ""),
     customTunnelShell: sanitizeCustomShell(c.get<CustomTunnelShell>("customTunnelShell", "default")),

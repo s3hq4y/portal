@@ -8,10 +8,6 @@ Portal is a VS Code extension that exposes the current workspace as a **public M
 
 Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your machine over a tunnel. The agent can run shells and move files.
 
-## What's new in 1.0.3
-
-- **Configurable agent instructions** — a new `portal.agentInstructions` setting replaces the instructions Portal returns to MCP clients during `initialize`. Leave it empty to keep the built-in default. Edit it from the Portal settings page (Agent instructions section) or VS Code settings. Changes apply the next time Portal starts.
-
 ## What you get
 
 | Surface | Role |
@@ -77,7 +73,7 @@ curl -fsSL -H "ngrok-skip-browser-warning: 1" \
 | --- | --- | --- |
 | `cloudflare-quick` (default) | new random `trycloudflare.com` each start | Fast to try; not stable |
 | `cloudflare-named` | fixed hostname | Needs stored Tunnel token, public hostname, **fixed local port** |
-| `ngrok-reserved` | reserved domain (e.g. `*.ngrok-free.dev`) | Persistent URL |
+| `ngrok-reserved` | reserved domain (e.g. `*.ngrok-free.dev`) | Persistent URL; enable `portal.ngrokPoolingEnabled` when multiple Portal/ngrok sessions intentionally share one reserved domain |
 | `custom` | your command or an existing URL | Placeholders: `{{port}}` `{{token}}` `{{workspace}}`. Empty command + `customTunnelUrl` = attach mode |
 
 Route token is the secret path segment. MCP lives at `/mcp/<token>`. Leave `portal.routeToken` empty to generate one on start.
@@ -92,7 +88,7 @@ Route token is the secret path segment. MCP lives at `/mcp/<token>`. Leave `port
 - **Portal: Install cloudflared** / **Install/Upgrade ngrok**
 - **Portal: Show Log** / **Show Agent Terminal**
 
-Useful settings: `portal.startOnActivation` (default on), `portal.showCommandsInTerminal`, `portal.localPort` (`0` = auto, except named Cloudflare).
+Useful settings: `portal.startOnActivation` (default on), `portal.showCommandsInTerminal`, `portal.localPort` (`0` = auto, except named Cloudflare), and `portal.ngrokPoolingEnabled` for ngrok reserved-domain load balancing.
 
 ## Build
 
