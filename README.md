@@ -109,4 +109,4 @@ Load the packaged VSIX, or run the extension in a desktop VS Code host (`extensi
 
 ## License
 
-MIT
+GPL-3.0-or-later — see [LICENSE](LICENSE).

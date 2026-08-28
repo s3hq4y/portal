@@ -19,6 +19,9 @@ function publicInfo(ctx: ToolContext, info: BackgroundCommandInfo): Record<strin
     exit_code: info.exitCode,
     signal: info.signal,
     termination_reason: info.terminationReason,
+    // Per-task log file (each background command writes its own). Tail it in a
+    // dedicated terminal, e.g. PowerShell: Get-Content -Wait -Tail 50 <path>
+    log_file: info.logFile ? relToWorkspace(ctx.workspaceRoot, info.logFile) : undefined,
   };
 }
 
@@ -50,7 +53,7 @@ const commandProperties = {
 
 export const startCommand: ToolModule = {
   name: "start_command",
-  description: "Start a long-running command and return immediately with command_id and PID. Up to four commands may run concurrently. Output is kept in bounded ring buffers and mirrored to the Portal Agent terminal. Use read_command with returned offsets, then stop_command when finished.",
+  description: "Start a long-running command and return immediately with command_id, PID, and log_file. Up to four commands may run concurrently. Each command streams its full stdout/stderr to its OWN log file (returned as log_file, under .portal/logs/) so tasks can be observed independently instead of interleaving in one terminal; tail it with e.g. Get-Content -Wait -Tail 50 <log_file>. Output is also kept in bounded ring buffers for read_command. Use read_command with returned offsets, then stop_command when finished.",
   inputSchema: {
     type: "object",
     properties: commandProperties,

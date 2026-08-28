@@ -109,4 +109,4 @@ npm run package    # 打 .vsix（不打包 node_modules）
 
 ## 许可证
 
-MIT
+GPL-3.0-or-later —— 详见 [LICENSE](LICENSE)。

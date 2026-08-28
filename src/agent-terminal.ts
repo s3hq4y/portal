@@ -82,16 +82,25 @@ export class AgentTerminalHost implements vscode.Disposable {
     if (!pty) return;
     const tag = this.shortId(info.commandId);
     pty.write(`\n${YELLOW}[${tag} started pid=${info.pid ?? "?"} shell=${info.shell}]${RESET} ${info.displayCommand}\n`);
+    // Each background task streams to its OWN log file so the shared terminal
+    // never becomes an interleaved firehose. Point the observer at it and show
+    // a ready-to-paste command to tail that single task in a dedicated terminal.
+    if (info.logFile) {
+      pty.write(`${DIM}  log:  ${info.logFile}${RESET}\n`);
+      pty.write(`${DIM}  tail: Get-Content -Wait -Tail 50 "${info.logFile}"${RESET}\n`);
+    }
   }
 
-  backgroundStdout(commandId: string, chunk: string): void {
-    const pty = this.backgroundPty();
-    if (pty) pty.write(this.tagChunk(commandId, chunk));
+  // Background stdout/stderr are intentionally NOT mirrored into the shared
+  // 'Portal Agent' terminal: doing so interleaves every concurrent task into one
+  // unreadable stream. Each task's full output lives in its own log file (see
+  // backgroundStarted) and is still available incrementally via read_command.
+  backgroundStdout(_commandId: string, _chunk: string): void {
+    /* no-op: observe per-task log files instead of the shared terminal */
   }
 
-  backgroundStderr(commandId: string, chunk: string): void {
-    const pty = this.backgroundPty();
-    if (pty) pty.write(`${RED}${this.tagChunk(commandId, chunk)}${RESET}`);
+  backgroundStderr(_commandId: string, _chunk: string): void {
+    /* no-op: observe per-task log files instead of the shared terminal */
   }
 
   backgroundExited(info: BackgroundCommandInfo): void {
@@ -99,7 +108,8 @@ export class AgentTerminalHost implements vscode.Disposable {
     if (!pty) return;
     const tag = this.shortId(info.commandId);
     const color = info.status === "exited" && info.exitCode === 0 ? GREEN : RED;
-    pty.write(`${DIM}[${color}${tag} ${info.status} exit=${info.exitCode ?? "?"}${RESET}${DIM}]${RESET}\n`);
+    const logHint = info.logFile ? ` ${DIM}(log: ${info.logFile})${RESET}` : "";
+    pty.write(`${DIM}[${color}${tag} ${info.status} exit=${info.exitCode ?? "?"}${RESET}${DIM}]${RESET}${logHint}\n`);
   }
 
   private backgroundPty(): AgentPty | undefined {
@@ -109,11 +119,6 @@ export class AgentTerminalHost implements vscode.Disposable {
 
   private shortId(commandId: string): string {
     return commandId.slice(0, 12);
-  }
-
-  private tagChunk(commandId: string, chunk: string): string {
-    const prefix = `[${this.shortId(commandId)}] `;
-    return prefix + chunk.replace(/\n(?!$)/g, `\n${prefix}`);
   }
 
   private ensureTerminal(): AgentPty {

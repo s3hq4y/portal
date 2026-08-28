@@ -5,3 +5,4 @@ out/
 *.zip
 npm-debug.log*
 .vscode/
+.portal/

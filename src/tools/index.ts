@@ -2,6 +2,7 @@
 // The HTTP file API (files/http.ts) is the file-transfer backend and is
 // mounted by the MCP server rather than registered here.
 
+import * as nodePath from "node:path";
 import { err, ToolCallResult, ToolContext, ToolDescriptor, ToolModule } from "./types";
 import { hostPathToPosix, resolveInWorkspace } from "./workspace";
 import type { CommandRunner, ShellKind } from "./spawn";
@@ -44,7 +45,14 @@ export class ToolExecutor {
     backgroundHooks?: BackgroundCommandHooks,
     env?: { wslDistro?: string; posixRoot?: string; defaultShell?: ShellKind },
   ) {
-    this.backgroundCommands = new BackgroundCommandRegistry(backgroundHooks);
+    // Each background task streams into its own log file under the workspace,
+    // so tasks can be tailed independently instead of interleaving in one
+    // shared terminal. Uses the host path flavor of the workspace root.
+    const joinPath = (workspaceRoot.startsWith("\\\\") || /^[a-zA-Z]:[\\/]/.test(workspaceRoot))
+      ? nodePath.win32.join
+      : nodePath.posix.join;
+    const logDir = joinPath(workspaceRoot, ".portal", "logs");
+    this.backgroundCommands = new BackgroundCommandRegistry(backgroundHooks, { logDir });
     const posixRoot = env?.posixRoot;
     this.ctx = {
       workspaceRoot,

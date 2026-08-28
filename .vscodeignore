@@ -13,3 +13,4 @@ npm-debug.log*
 *.vsix
 *.zip
 .gitignore
+.portal/
