@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none';" />
+<title>Portal Client</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <!-- Title bar (drag region; OS caption buttons overlay the right side) -->
+  <header class="titlebar">
+    <div class="tb-left">
+      <svg class="tb-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5.25 18.75V5.25h11.44v13.5H15V7.03H6.94v11.72Z"/><path d="M9.09 8.91h1.5v2.25h2.25V8.91h1.5v2.25h1.13v3.93h-2.63v2.81h-2.25v-2.81H7.96v-3.93h1.13Z"/></svg>
+      <div class="tb-text">
+        <div class="tb-title" data-i18n="app.title">Portal Client</div>
+        <div class="tb-sub" data-i18n="app.subtitle">Expose a folder as a public MCP endpoint</div>
+      </div>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-state">
+      <span class="led" id="tbLed"></span>
+      <span id="tbStateText">—</span>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- Navigation rail -->
+    <nav class="nav" id="nav">
+      <div class="nav-item active" data-page="overview">
+        <svg viewBox="0 0 24 24"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-4.5v-5.5h-5V21H5a1 1 0 0 1-1-1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.overview">Overview</span>
+      </div>
+      <div class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24"><path d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5Zm8.2 3.5a8 8 0 0 0-.2-1.7l2-1.55-2-3.4-2.4.96a8 8 0 0 0-1.4-.85L15.7 3h-4l-.5 2.46a8 8 0 0 0-1.4.85l-2.4-.96-2 3.4 2 1.55a8 8 0 0 0 0 1.7l-2 1.55 2 3.4 2.4-.96a8 8 0 0 0 1.4.85l.5 2.46h4l.5-2.46a8 8 0 0 0 1.4-.85l2.4.96 2-3.4-2-1.55a8 8 0 0 0 .2-1.7Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.settings">Settings</span>
+      </div>
+      <div class="nav-item" data-page="log">
+        <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5M9 12h7M9 16h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.log">Log</span>
+      </div>
+      <div class="nav-item" data-page="terminal">
+        <svg viewBox="0 0 24 24"><path d="M5 5h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m8 10 3 2.5L8 15M13 15h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="nav.terminal">Agent Terminal</span>
+      </div>
+      <div class="nav-sep"></div>
+      <div class="nav-item nav-browser-toggle" id="navBrowserToggle" title="Toggle browser panel">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 20h6M12 16.5V20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.browser">Browser</span>
+        <span class="nav-badge" id="navBrowserBadge" hidden>1</span>
+      </div>
+      <div class="nav-foot">
+        <div class="nav-version" id="navVersion">v1.0.0</div>
+      </div>
+    </nav>
+
+    <!-- Content -->
+    <main class="content" id="content">
+
+      <!-- ============ OVERVIEW ============ -->
+      <section class="page active" id="page-overview">
+        <div class="page-head">
+          <h1 data-i18n="overview.heading">Portal</h1>
+          <span class="badge idle" id="ovBadge">—</span>
+        </div>
+
+        <div class="card hero">
+          <div class="hero-row">
+            <span class="led big" id="ovLed"></span>
+            <div class="hero-meta">
+              <div class="hero-state" id="ovStateText">—</div>
+              <div class="hero-sub" id="ovStateSub"></div>
+            </div>
+          </div>
+          <div class="url-row">
+            <input id="ovUrl" type="text" readonly spellcheck="false" placeholder="" />
+            <button class="btn icon" id="ovCopyBtn" title="Copy URL">
+              <svg viewBox="0 0 24 24"><path d="M9 9h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            </button>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="ovStartBtn" data-i18n="overview.start">Start</button>
+            <button class="btn danger" id="ovStopBtn" data-i18n="overview.stop">Stop</button>
+            <span class="spacer"></span>
+            <button class="btn" id="ovCopyPromptBtn" data-i18n="overview.copyPrompt">Copy prompt</button>
+          </div>
+          <div class="hint" data-i18n="overview.hintShare">Share this URL with an MCP client. It embeds a secret route token — treat it like a password.</div>
+          <div class="advice" id="ovAdvice">
+            <div class="advice-title"><span class="advice-code" id="ovAdviceCode"></span><span id="ovAdviceTitle"></span></div>
+            <div class="advice-sol"><b data-i18n="advice.solution">Fix</b>: <span id="ovAdviceSol"></span></div>
+            <div class="btn-row">
+              <a class="link" id="ovAdviceLink" href="#" target="_blank" rel="noreferrer" data-i18n="advice.openDocs">Open docs</a>
+              <button class="btn small" id="ovAdviceCopy" data-i18n="advice.copySolution">Copy solution</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <div class="card-title" data-i18n="overview.session">Session</div>
+            <div class="conn-line" id="ovConn">—</div>
+            <div class="stats-grid">
+              <div class="stat"><div class="k" data-i18n="overview.stat.calls">Calls</div><div class="v" id="stCalls">0</div></div>
+              <div class="stat"><div class="k" data-i18n="overview.stat.avg">Avg</div><div class="v" id="stAvg">0 ms</div></div>
+              <div class="stat"><div class="k" data-i18n="overview.stat.failures">Failures</div><div class="v" id="stFail">0</div></div>
+              <div class="stat"><div class="k" data-i18n="overview.stat.success">Success</div><div class="v" id="stOk">100%</div></div>
+              <div class="stat"><div class="k" data-i18n="overview.stat.active">Active</div><div class="v" id="stActive">0</div></div>
+              <div class="stat"><div class="k">Protocol</div><div class="v small" id="stProto">Streamable HTTP</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title" data-i18n="overview.workspace">Workspace folder</div>
+            <div class="ws-line" id="ovWorkspace">—</div>
+            <div class="hint" data-i18n="overview.workspaceHint">The folder that gets exposed to connected agents.</div>
+            <div class="btn-row">
+              <button class="btn" id="ovChooseBtn" data-i18n="overview.choose">Choose…</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" id="ovFeedTitle" data-i18n="overview.session">Activity</div>
+          <div class="feed" id="ovFeed">
+            <div class="empty">
+              <div data-i18n="overview.empty">No activity yet.</div>
+              <div class="empty-sub" data-i18n="overview.emptyHint">Tool calls will appear here.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="page" id="page-settings">
+        <div class="page-head">
+          <h1 data-i18n="settings.heading">Settings</h1>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.provider">Tunnel provider</h2>
+          <div class="provider-list" id="providerList"></div>
+        </div>
+
+        <div class="card" id="card-ngrok" hidden>
+          <h2 data-i18n="provider.ngrok-reserved.name">ngrok Reserved Domain</h2>
+          <div class="label" data-i18n="settings.ngrokDomain">ngrok reserved domain</div>
+          <input type="text" id="inpNgrokDomain" placeholder="your-name.ngrok-free.dev" spellcheck="false" />
+          <label class="check"><input type="checkbox" id="inpNgrokPooling" /><span data-i18n="settings.ngrokPoolingEnabled">Enable ngrok load balancing (--pooling-enabled)</span></label>
+          <div class="hint" data-i18n="settings.ngrokPoolingHint">Only when several Portal/ngrok sessions intentionally share one reserved domain.</div>
+        </div>
+
+        <div class="card" id="card-cf" hidden>
+          <h2 data-i18n="provider.cloudflare-named.name">Cloudflare Named Tunnel</h2>
+          <div class="label" data-i18n="settings.cfHostname">Cloudflare hostname</div>
+          <input type="text" id="inpCfDomain" placeholder="bridge.example.com" spellcheck="false" />
+          <div class="label" data-i18n="settings.cfTunnelToken">Cloudflare Tunnel token (stored encrypted)</div>
+          <div class="row">
+            <input type="password" id="inpCfToken" placeholder="" spellcheck="false" />
+            <button class="btn" id="btnCfSave" data-i18n="settings.saveSecret">Save</button>
+            <button class="btn" id="btnCfClear" data-i18n="settings.clearSecret">Clear</button>
+          </div>
+          <div class="hint" id="cfTokenState" data-i18n="settings.cfTokenMissing">No token saved.</div>
+          <div class="hint" data-i18n="settings.cfFixedPortHint">Named tunnels need a fixed local port matching the Cloudflare Origin Service.</div>
+        </div>
+
+        <div class="card" id="card-custom" hidden>
+          <h2 data-i18n="provider.custom.name">Custom Tunnel</h2>
+          <div class="label" data-i18n="settings.customCommand">Custom tunnel command</div>
+          <textarea id="inpCustomCommand" spellcheck="false" placeholder="cloudflared tunnel --url http://127.0.0.1:{{port}}"></textarea>
+          <div class="label" data-i18n="settings.customUrl">Custom public URL (attach mode)</div>
+          <input type="text" id="inpCustomUrl" placeholder="https://bridge.example.com" spellcheck="false" />
+          <div class="grid2">
+            <div>
+              <div class="label" data-i18n="settings.customUrlPattern">URL regex (optional)</div>
+              <input type="text" id="inpCustomUrlPattern" spellcheck="false" />
+            </div>
+            <div>
+              <div class="label" data-i18n="settings.customReadyPattern">Ready regex (optional)</div>
+              <input type="text" id="inpCustomReadyPattern" spellcheck="false" />
+            </div>
+          </div>
+          <div class="hint" data-i18n="settings.customHint">Placeholders: {{port}} {{token}} {{workspace}}. Leave the command empty and fill the URL to attach to an existing tunnel.</div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.security">Security</h2>
+          <div class="label" data-i18n="settings.secretPath">Route token (/mcp/&lt;token&gt;)</div>
+          <div class="row">
+            <input type="text" id="inpRouteToken" spellcheck="false" />
+            <button class="btn" id="btnRegenToken" data-i18n="settings.regenerate">Regenerate</button>
+          </div>
+          <div class="hint" data-i18n="settings.secretPathHint">Leave empty to auto-generate on start.</div>
+          <div class="label" data-i18n="settings.localPort">Local port (0 = auto)</div>
+          <input type="number" id="inpLocalPort" min="0" max="65535" />
+          <div class="label" data-i18n="settings.maxTransfer">Max transfer size (bytes)</div>
+          <input type="number" id="inpMaxTransfer" min="1048576" step="1048576" />
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.diagnostics">Diagnostics</h2>
+          <div class="diag-row" id="diagCloudflared"></div>
+          <div class="diag-row" id="diagNgrok"></div>
+          <div class="btn-row">
+            <button class="btn" id="btnRecheck" data-i18n="settings.recheck">Recheck</button>
+            <span class="spacer"></span>
+            <button class="btn" id="btnOpenLogFolder" data-i18n="settings.openLog">Open log folder</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.prompts">Prompt templates</h2>
+          <div class="hint" data-i18n="prompt.hint">Pre-authored prompts that embed the live link: use {url} as placeholder; it is replaced with the current public MCP URL on copy.</div>
+          <div id="promptList"></div>
+          <div class="tpl-editor" id="promptEditor">
+            <div class="grid2">
+              <div>
+                <div class="label" data-i18n="prompt.nameLabel">Name</div>
+                <input type="text" id="promptName" spellcheck="false" />
+              </div>
+            </div>
+            <div class="label" data-i18n="prompt.templateLabel">Template</div>
+            <textarea id="promptText" spellcheck="false"></textarea>
+            <div class="btn-row">
+              <button class="btn primary" id="promptAddBtn" data-i18n="prompt.add">Add</button>
+              <button class="btn" id="promptUpdateBtn" data-i18n="prompt.update" hidden>Update</button>
+              <button class="btn" id="promptCancelBtn" data-i18n="prompt.cancel" hidden>Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.agentInstructions">Agent instructions</h2>
+          <textarea id="inpAgentInstructions" spellcheck="false" rows="5"></textarea>
+          <div class="hint" data-i18n="settings.agentInstructionsHint">Instructions returned to clients/agents on MCP `initialize`. Empty uses the built-in default. Takes effect on the next start.</div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnSaveInstructions" data-i18n="settings.saveInstructions">Save</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.tools">Tools</h2>
+          <div class="hint" data-i18n="settings.toolsHint">Portal deliberately exposes only command and file-transfer tools.</div>
+          <ul class="tools" id="toolsList"></ul>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="settings.section.connection">Behavior</h2>
+          <label class="check"><input type="checkbox" id="inpAutoStart" /><span data-i18n="settings.autoStart">Start when the app opens</span></label>
+          <label class="check"><input type="checkbox" id="inpShowTerm" /><span data-i18n="settings.showTerm">Mirror commands to the Agent Terminal</span></label>
+          <div class="label" data-i18n="settings.language">Language</div>
+          <select id="inpLanguage">
+            <option value="system">System</option>
+            <option value="en">English</option>
+            <option value="zh">简体中文</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- ============ LOG ============ -->
+      <section class="page" id="page-log">
+        <div class="page-head">
+          <h1 data-i18n="nav.log">Log</h1>
+          <span class="spacer"></span>
+          <button class="btn" id="logClearBtn" data-i18n="common.clear">Clear</button>
+          <button class="btn" id="logFolderBtn" data-i18n="settings.openLog">Open log folder</button>
+        </div>
+        <div class="card log-card">
+          <pre class="log" id="logView"></pre>
+        </div>
+      </section>
+
+      <!-- ============ TERMINAL ============ -->
+      <section class="page" id="page-terminal">
+        <div class="page-head">
+          <h1 data-i18n="nav.terminal">Agent Terminal</h1>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="termFollow" checked /><span data-i18n="agent.follow">Follow output</span></label>
+          <button class="btn" id="termClearBtn" data-i18n="agent.clear">Clear</button>
+        </div>
+        <div class="card term-card">
+          <pre class="term" id="termView"></pre>
+        </div>
+      </section>
+    </main>
+
+    <!-- Resizable splitter between content and the browser dock -->
+    <div class="splitter" id="splitter" hidden></div>
+
+    <!-- Right-docked browser panel (independent of the left tabs) -->
+    <aside class="browser-panel" id="browserPanel" hidden>
+      <div class="bp-head">
+        <div class="bp-bar">
+          <button class="btn icon" id="bBackBtn" title="Back"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="btn icon" id="bFwdBtn" title="Forward"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="btn icon" id="bReloadBtn" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="btn icon" id="bHomeBtn" title="Home"><svg viewBox="0 0 24 24"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-4.5v-5.5h-5V21H5a1 1 0 0 1-1-1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
+          <input id="bUrl" type="text" spellcheck="false" placeholder="https://…" />
+          <button class="btn primary" id="bGoBtn" data-i18n="browser.go">Go</button>
+          <button class="btn" id="bGrabBtn" data-i18n="browser.grab">Grab</button>
+          <button class="btn" id="bRefreshBtn" title="Refresh list"><svg viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="btn icon" id="bCloseBtn" title="Close panel"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+        </div>
+        <div class="bp-wins" id="bpWins" hidden>
+          <div class="bp-wins-scroll" id="bpWinsScroll"></div>
+        </div>
+        <div class="grab-hint" id="grabHint" hidden>
+          <span data-i18n="browser.grabHint">Grab mode is on — click any browser window on screen to dock it here.</span>
+          <button class="btn small" id="bGrabCancelBtn" data-i18n="browser.grabCancel">Cancel</button>
+        </div>
+      </div>
+      <div class="bp-view" id="bpView">
+        <div class="embed-empty" id="embedEmpty">
+          <div class="embed-empty-title" data-i18n="browser.emptyView">Type an address above, or dock a real browser window.</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

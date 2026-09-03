@@ -1,0 +1,52 @@
+{
+  "name": "portal-client",
+  "productName": "Portal Client",
+  "version": "1.0.0",
+  "description": "Standalone desktop app (Fluent UI) that exposes a local folder as a public MCP endpoint — a VS Code-free port of the Portal extension, with native browser-window embedding.",
+  "main": "dist/main/main.js",
+  "author": "s9y",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/s3hq4y/portal.git",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.js",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0"
+  },
+  "build": {
+    "appId": "dev.portal.client",
+    "productName": "Portal Client",
+    "files": [
+      "dist/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

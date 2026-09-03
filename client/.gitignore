@@ -13,13 +13,7 @@ release/
 
 # logs / runtime
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 .portal/
-
-# IDE
-.vscode/
-.idea/
 
 # env / secrets
 .env

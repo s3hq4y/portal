@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.vsix
+*.zip
+npm-debug.log*
+.vscode/
+.portal/
