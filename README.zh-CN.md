@@ -27,6 +27,8 @@ Portal 把本地文件夹变成一个 **公开 MCP（Model Context Protocol）�
 | 隧道 | ngrok 预留域名 · Cloudflare Quick / Named · 自定义命令 |
 | 界面本地化 | English / 简体中文 |
 
+> ⚠️ **测试状态** —— 目前只有 **ngrok** 这一种隧道方式经过实际测试。Cloudflare Quick / Named 隧道以及自定义隧道命令虽已实现，但**尚未测试**，请视为实验性功能，遇到问题欢迎提 issue。
+
 ## 我该用哪一个？
 
 - **不想装/开 VS Code，想要独立应用，或者想把真正的浏览器窗口停靠进来？** → [`client/`](client/README.md)

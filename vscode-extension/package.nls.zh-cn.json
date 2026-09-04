@@ -38,8 +38,20 @@
   "command.installCloudflared": "Portal：安装 cloudflared",
   "command.installNgrok": "Portal：安装/升级 ngrok",
   "command.setTunnelProvider": "Portal：设置隧道提供方...",
+  "command.restart": "Portal：重启",
+  "command.switchProfile": "Portal：切换连接配置档案…",
+  "command.tokenSelect": "Portal：选择 MCP 会话",
+  "command.tokenAdd": "Portal：添加 MCP 会话",
+  "command.tokenRemove": "Portal：移除 MCP 会话",
   "command.setNgrokDomain": "Portal：设置 ngrok 域名...",
   "command.setRouteToken": "Portal：设置路由令牌...",
   "command.showLog": "Portal：显示日志",
-  "command.showAgentTerminal": "Portal：显示 Agent 终端"
+  "command.showAgentTerminal": "Portal：显示 Agent 终端",
+
+  "config.ngrokConfigPath.desc": "传给 ngrok 的 `--config` 配置文件路径。让每个 VS Code 窗口指向不同的文件，即可同时运行两个 ngrok 账号（两个 authtoken）。留空则使用 ngrok 的默认配置文件。",
+  "config.ngrokApiPort.desc": "Portal 查询 ngrok 隧道列表所用的本地端口。同时运行的 ngrok 不能共用端口，第二个会自动挪到 4041，因此给第二个窗口填 4041 可免掉启动等待。`0`（默认）= 扫描 4040-4045 并按域名匹配隧道（当前这版 ngrok 没有 `--web-addr` 参数）。",
+  "config.connectionProfiles.desc": "命名的连接配置档案（隧道提供方、域名、ngrok 配置文件、路由令牌等）。列表全局共享，可在 Portal 设置页中管理。",
+  "config.tokens.desc": "相互独立的 MCP 会话（每个含 id、名称、routeToken、可选 workspacePath 与隧道覆盖）。每个会话发布自己的公网 MCP 端点并可并行运行；Portal 侧边栏选择显示哪一个。",
+  "config.activeTokenId.desc": "Portal 侧边栏当前显示的会话 id。打开文件夹时按工作区保存。",
+  "config.activeProfile.desc": "当前工作区使用的连接配置档案名称。打开文件夹时保存在工作区（.vscode/settings.json）中，因此多个 VS Code 窗口可以同时使用不同档案。可从侧边栏、设置页或「Portal：切换连接配置档案」切换。"
 }

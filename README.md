@@ -27,6 +27,8 @@ The same idea ships in two forms in this repository:
 | Tunnels | ngrok reserved domain · Cloudflare Quick / Named · custom command |
 | Localized UI | English / 简体中文 |
 
+> ⚠️ **Testing status** — Only the **ngrok** tunnel option has been tested. Cloudflare Quick / Named tunnels and custom tunnel commands are implemented but **untested**; treat them as experimental and please report anything broken.
+
 ## Which one should I use?
 
 - **No VS Code, want a dedicated app, or want to dock your real browser inside it?** → [`client/`](client/README.md)

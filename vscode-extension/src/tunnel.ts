@@ -112,16 +112,37 @@ export interface RunningTunnel {
 
 type TunnelChild = ReturnType<typeof spawn> & { stdout: NodeJS.ReadableStream; stderr: NodeJS.ReadableStream };
 
-// Spawn `ngrok http <port> --url <domain>` (optionally with --pooling-enabled) and wait for the URL in the local API.
+// Spawn `ngrok http <port> --url <domain> [--config <file>]` (optionally with
+// --pooling-enabled) and wait for the URL in the local inspection API.
+
+// Per-instance ngrok knobs: a dedicated config file (different account) and a
+// dedicated inspection port (several agents cannot share :4040).
+export interface NgrokStartOptions {
+  configPath?: string;
+  apiPort?: number;
+}
 //
 // The agent prints its failures (ERR_NGROK_<code>) to stderr and keeps running
 // in some cases, so output is watched continuously: a recognized error fails
 // startup immediately with an attached solution instead of the old behavior of
 // optimistically adopting the expected URL after a 20s timeout. After a ready
 // tunnel dies unexpectedly, the output tail is forwarded for diagnosis.
-export async function startNgrok(localPort: number, reservedDomain: string, poolingEnabled: boolean, onLog: (s: string) => void): Promise<RunningTunnel> {
+export async function startNgrok(
+  localPort: number,
+  reservedDomain: string,
+  poolingEnabled: boolean,
+  onLog: (s: string) => void,
+  opts: NgrokStartOptions = {},
+): Promise<RunningTunnel> {
   if (!reservedDomain) throw new TunnelError(t("err.ngrokDomainMissing"), "ngrok-reserved");
-  const args = ["http", String(localPort), "--url", reservedDomain.replace(/^https?:\/\//i, "")];
+  const domain = reservedDomain.replace(/^https?:\/\//i, "");
+  // NOTE: this ngrok build has no `--web-addr` flag (it rejects unknown flags),
+  // so the inspection port is never pinned on the command line: each agent
+  // takes the first free port (4040, then 4041, ...). Portal therefore scans the
+  // candidate ports below and matches by public URL, which also means several
+  // concurrent agents can be told apart without any configuration.
+  const args = ["http", String(localPort), "--url", domain];
+  if (opts.configPath) args.push("--config", opts.configPath);
   if (poolingEnabled) args.push("--pooling-enabled");
   onLog(`[ngrok] starting: ngrok ${args.join(" ")}`);
   const child = spawn("ngrok", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }) as unknown as TunnelChild;
@@ -172,7 +193,7 @@ export async function startNgrok(localPort: number, reservedDomain: string, pool
   });
 
   // Happy path: poll the local inspection API for the reserved domain.
-  void waitForNgrokUrl(reservedDomain, 20_000, onLog).then((url) => {
+  void waitForNgrokUrl(domain, apiPortCandidates(opts.apiPort), 20_000, onLog).then((url) => {
     if (!settled) { settled = true; ready = true; resolveUrl(url); }
   }, () => { /* unreachable: waitForNgrokUrl never rejects */ });
 
@@ -197,18 +218,30 @@ export async function startNgrok(localPort: number, reservedDomain: string, pool
 
 // Poll the local ngrok API until the reserved domain appears; on timeout,
 // optimistically return the expected URL.
-async function waitForNgrokUrl(reservedDomain: string, timeoutMs: number, onLog: (s: string) => void): Promise<string> {
-  const url = `https://${reservedDomain.replace(/^https?:\/\//i, "")}`;
+// Ports to ask for the tunnel list, in order. A configured port is tried first;
+// the rest covers agents that had to fall through when the default was taken.
+function apiPortCandidates(configured: number | undefined): number[] {
+  const scan = [NGROK_API_DEFAULT, 4041, 4042, 4043, 4044, 4045];
+  const pin = configured && configured > 0 && configured <= 65_535 ? Math.round(configured) : 0;
+  return pin ? [pin, ...scan.filter((p) => p !== pin)] : scan;
+}
+
+async function waitForNgrokUrl(reservedDomain: string, apiPorts: readonly number[], timeoutMs: number, onLog: (s: string) => void): Promise<string> {
+  const host = reservedDomain.replace(/^https?:\/\//i, "");
+  const url = `https://${host}`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      const tunnels = await fetchJson(`http://127.0.0.1:${NGROK_API_DEFAULT}/api/tunnels`, 1500);
-      const found = (tunnels?.tunnels ?? []).find((x: any) => String(x?.public_url ?? "").endsWith(reservedDomain.replace(/^https?:\/\//i, "")));
-      if (found) return String(found.public_url);
-    } catch { /* not ready yet */ }
+    for (const port of apiPorts) {
+      try {
+        const tunnels = await fetchJson(`http://127.0.0.1:${port}/api/tunnels`, 1500);
+        const found = (tunnels?.tunnels ?? []).find((x: any) => String(x?.public_url ?? "").endsWith(host));
+        // Match on the domain so several concurrent agents never get confused.
+        if (found) return String(found.public_url);
+      } catch { /* not ready yet */ }
+    }
     await sleep(500);
   }
-  onLog(`[ngrok] timeout waiting for API on :${NGROK_API_DEFAULT}; assuming ${url}`);
+  onLog(`[ngrok] timeout waiting for API on :${apiPorts.join("/")}; assuming ${url}`);
   return url;
 }
 

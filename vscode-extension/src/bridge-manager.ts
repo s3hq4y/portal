@@ -12,8 +12,8 @@
  * listener sets.
  */
 import * as vscode from "vscode";
-import { ActivityItem, BridgeState, ErrorAdvice, LogEntry, PromptTemplate, SessionStats, TunnelDiagnostics } from "./types";
-import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, PortalConfig, readConfig, updateConfig } from "./config";
+import { ActivityItem, BridgeState, ErrorAdvice, LogEntry, MCPTokenProfile, PromptTemplate, SessionStats, TunnelDiagnostics } from "./types";
+import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, PortalConfig, effectiveConfigFor, readConfig, updateConfig } from "./config";
 import { generateRouteToken, McpHttpServer } from "./mcp-server";
 import { ToolDescriptor, ToolExecutor } from "./tool-executor";
 import { adviceForError, matchKnownError } from "./error-doctor";
@@ -57,9 +57,25 @@ export class BridgeManager {
   constructor(
     output: vscode.OutputChannel,
     private readonly secrets: vscode.SecretStorage,
+    private readonly profile?: MCPTokenProfile,
   ) {
     this.output = output;
-    this.agentTerm = new AgentTerminalHost(() => readConfig().showCommandsInTerminal);
+    this.agentTerm = new AgentTerminalHost(() => this.cfg().showCommandsInTerminal);
+  }
+
+  // Effective config for THIS session: settings (after the active connection
+  // profile) merged with this session's overrides.
+  private cfg(): PortalConfig { return effectiveConfigFor(readConfig(), this.profile); }
+
+  // Workspace folder for this session: the session's workspacePath wins,
+  // otherwise the first VS Code workspace folder (unchanged behaviour).
+  private resolveFolder(): vscode.WorkspaceFolder | undefined {
+    if (this.profile?.workspacePath) {
+      const uri = vscode.Uri.file(this.profile.workspacePath);
+      const name = uri.path.split("/").pop() || "workspace";
+      return { uri, name, index: 0 };
+    }
+    return vscode.workspace.workspaceFolders?.[0];
   }
 
   getState(): BridgeState { return this.state; }
@@ -76,7 +92,7 @@ export class BridgeManager {
   // Prompt templates plus the URL they should currently embed (running URL or
   // a deterministic prediction). Consumed by both webviews and copyPrompt.
   getPromptSnapshot(): { templates: PromptTemplate[]; url?: string } {
-    const cfg = readConfig();
+    const cfg = this.cfg();
     return { templates: cfg.promptTemplates, url: currentPublicUrl(cfg, this.state) };
   }
   onActivity(fn: (a: readonly ActivityItem[]) => void): vscode.Disposable { this.activityListeners.add(fn); fn(this.activities); return { dispose: () => this.activityListeners.delete(fn) }; }
@@ -85,7 +101,7 @@ export class BridgeManager {
   showAgentTerminal(): void { this.agentTerm.show(); }
 
   async refreshDiagnostics(): Promise<TunnelDiagnostics> {
-    const cfg = readConfig();
+    const cfg = this.cfg();
     const [cf, ng, cloudflareToken] = await Promise.all([
       detectCloudflared(),
       detectNgrok(),
@@ -111,12 +127,12 @@ export class BridgeManager {
 
   // Start: state machine goes idle -> starting -> running (or error).
   async start(): Promise<void> {
-    const cfg = readConfig();
+    const cfg = this.cfg();
     if (this.state.kind === "running" || this.state.kind === "starting") return;
-    this.setState({ kind: "starting", since: Date.now(), provider: cfg.tunnelProvider });
+    this.setState({ kind: "starting", since: Date.now(), provider: cfg.tunnelProvider, profileName: cfg.activeProfile || undefined });
     this.log("info", t("log.starting", cfg.tunnelProvider));
     try {
-      const folder = vscode.workspace.workspaceFolders?.[0];
+      const folder = this.resolveFolder();
       if (!folder) throw new Error(t("err.noWorkspace"));
       const ws = resolveWorkspace(folder);
       this.workspaceInfo = ws;
@@ -198,6 +214,7 @@ export class BridgeManager {
         localPort: port,
         routeToken: token,
         tunnelPid: this.tunnel.pid,
+        profileName: cfg.activeProfile || undefined,
       });
       this.log("info", t("log.running", finalUrl));
       this.log("info", t("log.fileHttp", filesBase));
@@ -236,6 +253,13 @@ export class BridgeManager {
     this.log("info", t("log.stopped"));
   }
 
+  // Stop and start again. Used when the connection settings (e.g. the active
+  // profile) changed: the tunnel reads its config once, at start time.
+  async restart(): Promise<void> {
+    await this.stop();
+    await this.start();
+  }
+
   // Pick the tunnel starter for the configured provider; validate prerequisites first.
   private async startTunnelFor(cfg: PortalConfig, port: number, routeToken: string): Promise<RunningTunnel> {
     const log = (s: string) => this.log("info", s);
@@ -245,7 +269,10 @@ export class BridgeManager {
         const ng = await detectNgrok();
         if (!ng.installed) throw new Error(ng.lastError ?? t("err.ngrokNotInstalled"));
         if (!ng.configValid) throw new Error(ng.lastError ?? t("err.ngrokAuthInvalid"));
-        return await startNgrok(port, cfg.ngrokDomain, cfg.ngrokPoolingEnabled, log);
+        return await startNgrok(port, cfg.ngrokDomain, cfg.ngrokPoolingEnabled, log, {
+          configPath: cfg.ngrokConfigPath || undefined,
+          apiPort: cfg.ngrokApiPort || undefined,
+        });
       }
       case "custom": {
         if (!cfg.customTunnelCommand.trim() && !cfg.customTunnelUrl.trim()) {

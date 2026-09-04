@@ -5,7 +5,8 @@
  * purely via postMessage.
  */
 import * as vscode from "vscode";
-import { BridgeManager } from "../bridge-manager";
+import { SessionHub } from "../session-hub";
+import { getActiveProfileName, listProfiles, setActiveProfile } from "../profiles";
 import { localeTag, t, webviewL10nScript } from "../nls";
 
 // Mounted once by extension.ts; the webview HTML is static — all updates are pushed.
@@ -15,7 +16,7 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
   private ready = false;
   private disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly bm: BridgeManager) {}
+  constructor(private readonly bm: SessionHub) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -30,6 +31,10 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
       this.bm.onActivity(() => this.push("activity", { items: this.bm.getActivities() })),
       this.bm.onStats(() => this.push("stats", { stats: this.bm.getStats() })),
       webviewView.webview.onDidReceiveMessage((m) => this.handle(m)),
+      // Profiles live in settings, so re-push them whenever a portal.* key changes.
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("portal")) this.pushProfiles();
+      }),
     );
     webviewView.onDidDispose(() => {
       this.view = undefined;
@@ -48,10 +53,16 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
     this.push("prompts", this.bm.getPromptSnapshot());
   }
 
+  private pushProfiles(): void {
+    this.push("profiles", { profiles: listProfiles(), active: getActiveProfileName() });
+  }
+
   private pushAll(): void {
     this.push("state", { state: this.bm.getState() });
+    this.pushProfiles();
     this.push("activity", { items: this.bm.getActivities() });
     this.push("stats", { stats: this.bm.getStats() });
+    this.push("tokens", { sessions: this.bm.listSessions(), active: this.bm.getActiveId() });
     this.pushPrompts();
   }
 
@@ -62,6 +73,23 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
       case "start": await this.bm.start(); break;
       case "stop": await this.bm.stop(); break;
       case "openSettings": await vscode.commands.executeCommand("portal.showPanel"); break;
+      case "selectToken": this.bm.setActive(String(msg.id)); this.pushAll(); break;
+      case "restart": await this.bm.restart(); break;
+      case "activateProfile": {
+        const name = String(msg.name ?? "");
+        const target = await setActiveProfile(name);
+        if (target === vscode.ConfigurationTarget.Global) vscode.window.showWarningMessage(t("profile.noFolder"));
+        this.pushProfiles();
+        const st = this.bm.getState();
+        const label = name || t("profile.defaultOption");
+        if (st.kind === "running" || st.kind === "starting") {
+          const answer = await vscode.window.showInformationMessage(t("profile.switchedRestart", label), t("profile.restartNow"));
+          if (answer) await this.bm.restart();
+        } else {
+          vscode.window.showInformationMessage(t("profile.switched", label));
+        }
+        break;
+      }
       case "copyText":
         await vscode.env.clipboard.writeText(String(msg.text ?? ""));
         vscode.window.showInformationMessage(t("msg.copied"));
@@ -99,6 +127,10 @@ function renderHtml(): string {
     --win-err-dark: #C42B1C;
   }
   * { box-sizing: border-box; border-radius: 0 !important; }
+  .tokenbar { display: flex; align-items: center; gap: 7px; margin: 0 10px 8px; flex: none; }
+  .tokenbar .tokenlabel { font-size: 10.5px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+  .tokenbar .tsel { flex: 1; min-width: 0; background: var(--input); color: var(--fg); border: 1px solid var(--border); padding: 3px 6px; font: inherit; font-size: 11.5px; }
+  .tokenbar .tsel:focus { outline: none; border-color: var(--win-accent); }
   html, body { height: 100%; }
   body { margin: 0; display: flex; flex-direction: column; font: 13px/1.45 "Segoe UI", "Microsoft YaHei UI", -apple-system, sans-serif; color: var(--fg); background: var(--bg); }
 
@@ -169,6 +201,11 @@ function renderHtml(): string {
   .promptbar.show { display: flex; }
   .psel { flex: 1; min-width: 0; background: var(--input); color: var(--fg); border: 1px solid var(--border); padding: 3px 4px; font: inherit; font-size: 11.5px; }
   .psel:focus { outline: none; border-color: var(--win-accent); }
+  .psel.psel-sm { flex: none; max-width: 104px; }
+  .runprofile { font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 1px 4px; max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .runprofile.warn { color: var(--win-warn); border-color: var(--win-warn); }
+  .runprofile.clickable { cursor: pointer; }
+  .runprofile.clickable:hover { background: var(--win-warn); color: #000; }
   .promptbar .icon-btn { border: 1px solid var(--border); width: 24px; height: 24px; }
 </style>
 </head>
@@ -199,10 +236,16 @@ function renderHtml(): string {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="8" y="8" width="12" height="12"/><path d="M16 8V4H4v12h4"/></svg>
     </button>
   </div>
+  <div class="tokenbar">
+    <span class="tokenlabel">${t("sidebar.session")}</span>
+    <select id="tokenSel" class="tsel" title="${t("sidebar.sessionPick")}"></select>
+  </div>
   <div class="session">
     <div class="head">
       <span class="led" id="connDot"></span><b>${t("sidebar.session")}</b>
       <span class="spacer"></span>
+      <select class="psel psel-sm" id="profileSel" title="${t("sidebar.profile")}"></select>
+      <span class="runprofile" id="runProfile" style="display:none;"></span>
       <button class="btn primary" id="toggleBtn">${t("sidebar.start")}</button>
     </div>
     <div class="conn" id="connText">${t("sidebar.stopped")}</div>
@@ -221,6 +264,7 @@ function renderHtml(): string {
     let state = { kind: 'idle' };
     let stats = { connected: false, toolCalls: 0, failures: 0, totalResponseMs: 0, activeRequests: 0, protocol: 'Streamable HTTP' };
     let promptsData = { templates: [], url: undefined };
+    let profileData = { list: [], active: '' };
     let lastAdvice = null;
 
     const renderTpl = (text, url) => url ? text.replace(/\\{url\\}/gi, url) : text;
@@ -251,6 +295,7 @@ function renderHtml(): string {
       btn.textContent = running ? t('sidebar.stop') : t('sidebar.start');
       btn.className = 'btn ' + (running ? 'danger' : 'primary');
       renderConn();
+      renderRunningProfile();
       renderAdvice(s);
     }
     // Error-doctor card, shown between the header and the feed on failure.
@@ -300,6 +345,31 @@ function renderHtml(): string {
       ).join('');
       feed.scrollTop = feed.scrollHeight;
     }
+    // Profile picker + the profile the current session actually started with.
+    function renderProfiles(d) {
+      profileData = { list: (d && d.profiles) || [], active: (d && d.active) || '' };
+      const sel = $('profileSel');
+      sel.innerHTML = '<option value="">' + esc(t('profile.defaultOption')) + '</option>' +
+        profileData.list.map((p) => '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>').join('');
+      sel.value = profileData.active;
+      sel.style.display = profileData.list.length ? '' : 'none';
+      renderRunningProfile();
+    }
+    function renderRunningProfile() {
+      const el = $('runProfile');
+      if (state.kind !== 'running' && state.kind !== 'starting') { el.style.display = 'none'; el.textContent = ''; return; }
+      el.style.display = '';
+      const running = state.profileName || '';
+      const selected = profileData.active || '';
+      if (running && running !== selected) {
+        const msg = t('profile.stale', running, selected || t('profile.defaultOption'));
+        el.textContent = msg; el.title = msg + ' \\u00b7 ' + t('profile.restartNow'); el.className = 'runprofile warn clickable';
+      } else {
+        el.textContent = running ? t('profile.runningAs', running) : t('profile.runningDefault');
+        el.title = el.textContent; el.className = 'runprofile';
+      }
+    }
+
     function renderConn() {
       const live = stats.connected;
       const running = state.kind === 'running' || state.kind === 'starting';
@@ -324,11 +394,26 @@ function renderHtml(): string {
       const last = stats.lastTool ? t('sidebar.footer.lastTool', stats.lastTool) + (stats.lastToolAt ? ' \\u00b7 ' + fmtTime(stats.lastToolAt) : '') : '';
       $('footer').textContent = stats.protocol + (last ? ' \\u00b7 ' + last : '');
     }
+    function renderTokens(sessions, active) {
+      const sel = $('tokenSel');
+      if (!sessions || !sessions.length) {
+        sel.innerHTML = '<option value="default">' + esc(t('session.defaultLabel')) + '</option>';
+        sel.value = 'default';
+        return;
+      }
+      sel.innerHTML = sessions.map((s) => '<option value="' + esc(s.id) + '">' + esc(s.label) + '</option>').join('');
+      sel.value = active || '';
+    }
+    $('runProfile').addEventListener('click', () => {
+      if ($('runProfile').className.indexOf('warn') >= 0) vscode.postMessage({ type: 'restart' });
+    });
+    $('tokenSel').addEventListener('change', (ev) => vscode.postMessage({ type: 'selectToken', id: ev.target.value }));
     $('settingsBtn').addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
     $('toggleBtn').addEventListener('click', () => {
       const running = state.kind === 'running' || state.kind === 'starting';
       vscode.postMessage({ type: running ? 'stop' : 'start' });
     });
+    $('profileSel').addEventListener('change', (e) => vscode.postMessage({ type: 'activateProfile', name: e.target.value }));
     $('promptCopy').addEventListener('click', copySelectedPrompt);
     $('adviceCopy').addEventListener('click', () => {
       if (!lastAdvice) return;
@@ -344,6 +429,8 @@ function renderHtml(): string {
       if (m.type === 'state') renderState(m.state);
       if (m.type === 'activity') renderActivity(m.items);
       if (m.type === 'stats') renderStats(m.stats);
+      if (m.type === 'profiles') renderProfiles(m);
+      if (m.type === 'tokens') renderTokens(m.sessions, m.active);
       if (m.type === 'prompts') { promptsData = { templates: m.templates || [], url: m.url }; renderPrompts(); }
     });
     setInterval(renderFooter, 1000);

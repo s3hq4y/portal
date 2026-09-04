@@ -31,6 +31,14 @@ const KB: KbEntry[] = [
     link: "https://ngrok.com/docs/errors/err_ngrok_334",
   },
   {
+    // ngrok 320 — the reserved domain lives on a different account than the
+    // authtoken in use (almost always a --config file of the wrong account).
+    pattern: /ERR_NGROK_320\b/i,
+    titleKey: "adv.ngrok320.title",
+    fixKey: "adv.ngrok320.fix",
+    link: "https://ngrok.com/docs/errors/err_ngrok_320",
+  },
+  {
     // ngrok auth problems (message mentions the authtoken regardless of code).
     pattern: /(?:ERR_NGROK_\d+|ngrok)[\s\S]{0,400}(?:authtoken|authentication token)|(?:authtoken|authentication token)[\s\S]{0,400}ngrok/i,
     titleKey: "adv.ngrokAuth.title",

@@ -6,11 +6,12 @@
  * section layout and selection accent bars.
  */
 import * as vscode from "vscode";
-import { BridgeManager } from "./bridge-manager";
+import { SessionHub } from "./session-hub";
 import { generateRouteToken } from "./mcp-server";
-import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, readConfig, updateConfig } from "./config";
+import { CLOUDFLARE_TUNNEL_TOKEN_SECRET, readConfig, sanitizeTokens, updateConfig } from "./config";
+import { deleteProfile, duplicateProfile, listProfiles, patchProfile, sanitizeProfile, selectionTarget, setActiveProfile, upsertProfile } from "./profiles";
 import { writePromptTemplates } from "./prompts";
-import { PromptTemplate, TunnelProvider } from "./types";
+import { ConnectionProfile, PromptTemplate, TunnelProvider } from "./types";
 import { localeTag, t, webviewL10nScript } from "./nls";
 
 export class SettingsPage {
@@ -19,7 +20,7 @@ export class SettingsPage {
   private ready = false;
   private disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly bm: BridgeManager, private readonly secrets: vscode.SecretStorage) {}
+  constructor(private readonly bm: SessionHub, private readonly secrets: vscode.SecretStorage) {}
 
   // Reveal the existing panel or create it; retainContextWhenHidden keeps the
   // webview alive when hidden.
@@ -99,15 +100,16 @@ export class SettingsPage {
           this.pushConfig();
           break;
         }
-        await updateConfig("tunnelProvider", msg.provider as TunnelProvider);
-        this.refresh();
+        await this.writeConnField({ tunnelProvider: msg.provider as TunnelProvider });
         await this.bm.refreshDiagnostics();
         break;
-      case "setNgrokDomain": await updateConfig("ngrokDomain", String(msg.domain ?? "").trim()); this.refresh(); break;
-      case "setNgrokPoolingEnabled": await updateConfig("ngrokPoolingEnabled", !!msg.value); this.refresh(); break;
-      case "setCloudflareDomain": await updateConfig("cloudflareDomain", String(msg.domain ?? "").trim()); this.refresh(); break;
-      case "setCustomTunnelCommand": await updateConfig("customTunnelCommand", String(msg.command ?? "").trim()); this.refresh(); break;
-      case "setCustomTunnelUrl": await updateConfig("customTunnelUrl", String(msg.url ?? "").trim()); this.refresh(); break;
+      case "setNgrokDomain": await this.writeConnField({ ngrokDomain: String(msg.domain ?? "").trim() }); break;
+      case "setNgrokConfigPath": await this.writeConnField({ ngrokConfigPath: String(msg.path ?? "").trim() }); break;
+      case "setNgrokApiPort": await this.writeConnField({ ngrokApiPort: Math.max(0, Number(msg.port) || 0) }); break;
+      case "setNgrokPoolingEnabled": await this.writeConnField({ ngrokPoolingEnabled: !!msg.value }); break;
+      case "setCloudflareDomain": await this.writeConnField({ cloudflareDomain: String(msg.domain ?? "").trim() }); break;
+      case "setCustomTunnelCommand": await this.writeConnField({ customTunnelCommand: String(msg.command ?? "").trim() }); break;
+      case "setCustomTunnelUrl": await this.writeConnField({ customTunnelUrl: String(msg.url ?? "").trim() }); break;
       case "saveCloudflareTunnelToken": {
         const token = String(msg.token ?? "").trim();
         if (!token) { vscode.window.showWarningMessage(t("msg.cfTokenEmpty")); break; }
@@ -123,7 +125,7 @@ export class SettingsPage {
         this.refresh();
         await this.bm.refreshDiagnostics();
         break;
-      case "setRouteToken": await updateConfig("routeToken", String(msg.token ?? "")); this.refresh(); break;
+      case "setRouteToken": await this.writeConnField({ routeToken: String(msg.token ?? "") }); break;
       // Prompt template CRUD; copy is handled client-side via copyText.
       case "addPrompt": {
         const cfg = readConfig();
@@ -158,7 +160,7 @@ export class SettingsPage {
         this.refresh();
         break;
       }
-      case "setLocalPort": await updateConfig("localPort", Math.max(0, Number(msg.port) || 0)); this.refresh(); break;
+      case "setLocalPort": await this.writeConnField({ localPort: Math.max(0, Number(msg.port) || 0) }); break;
       case "setStartOnActivation": await updateConfig("startOnActivation", !!msg.value); this.refresh(); break;
       case "setShowCommandsInTerminal": await updateConfig("showCommandsInTerminal", !!msg.value); this.refresh(); break;
       case "setAgentInstructions":
@@ -177,11 +179,122 @@ export class SettingsPage {
         vscode.window.showInformationMessage(t("msg.tokenReset"));
         break;
       }
+      // ---- connection profiles ----
+      case "profileSave": {
+        const name = String(msg.profile?.name ?? "").trim();
+        if (!name) { vscode.window.showWarningMessage(t("profile.nameRequired")); break; }
+        const previous = String(msg.originalName ?? "").trim();
+        if (previous !== name && listProfiles().some((p) => p.name === name)) {
+          vscode.window.showWarningMessage(t("profile.nameDuplicate"));
+          break;
+        }
+        const profile = sanitizeProfile({ ...(msg.profile ?? {}), name });
+        if (!profile) break;
+        const wasActive = readConfig().activeProfile === previous;
+        if (previous && previous !== name) await deleteProfile(previous);
+        await upsertProfile(profile);
+        if (wasActive) await setActiveProfile(name);
+        vscode.window.showInformationMessage(t("profile.saved", name));
+        this.refresh();
+        await this.bm.refreshDiagnostics();
+        break;
+      }
+      case "profileDelete": {
+        const name = String(msg.name ?? "");
+        await deleteProfile(name);
+        vscode.window.showInformationMessage(t("profile.deleted", name));
+        this.refresh();
+        break;
+      }
+      case "profileDuplicate": {
+        const copy = await duplicateProfile(String(msg.name ?? ""));
+        if (copy) vscode.window.showInformationMessage(t("profile.duplicated", copy));
+        this.refresh();
+        break;
+      }
+      case "profileActivate": {
+        const name = String(msg.name ?? "");
+        const target = await setActiveProfile(name);
+        if (target === vscode.ConfigurationTarget.Global) vscode.window.showWarningMessage(t("profile.noFolder"));
+        this.refresh();
+        await this.bm.refreshDiagnostics();
+        await this.offerRestart(name || t("profile.defaultOption"));
+        break;
+      }
+      // ---- MCP sessions (token profiles) ----
+      case "sessionSave": {
+        const id = String(msg.session?.id ?? "").trim();
+        const label = String(msg.session?.label ?? "").trim();
+        if (!id) { vscode.window.showWarningMessage(t("session.idRequired")); break; }
+        const previous = String(msg.originalId ?? "").trim();
+        const list = readConfig().tokens;
+        if (previous !== id && list.some((s) => s.id === id)) {
+          vscode.window.showWarningMessage(t("session.idDuplicate"));
+          break;
+        }
+        const clean = sanitizeTokens([{ ...(msg.session ?? {}), id, label: label || id }])[0];
+        if (!clean) break;
+        const next = list.filter((s) => s.id !== id && s.id !== previous);
+        next.push(clean);
+        await updateConfig("tokens", next);
+        vscode.window.showInformationMessage(t("session.saved", id));
+        this.refresh();
+        break;
+      }
+      case "sessionDelete": {
+        const id = String(msg.id ?? "");
+        await updateConfig("tokens", readConfig().tokens.filter((s) => s.id !== id));
+        if (this.bm.getActiveId() === id) {
+          await updateConfig("activeTokenId", "", selectionTarget());
+          this.bm.setActive("default");
+        }
+        vscode.window.showInformationMessage(t("session.deleted", id));
+        this.refresh();
+        break;
+      }
+      case "sessionActivate": {
+        const id = String(msg.id ?? "");
+        // Per-workspace, like the connection profile: two windows can work on
+        // different sessions at the same time.
+        await updateConfig("activeTokenId", id, selectionTarget());
+        this.bm.setActive(id);
+        this.refresh();
+        break;
+      }
       case "installNgrok": await vscode.commands.executeCommand("portal.installNgrok"); break;
       case "installCloudflared": await vscode.commands.executeCommand("portal.installCloudflared"); break;
       case "showLog": await vscode.commands.executeCommand("portal.showLog"); break;
       case "openSettingsJson": await vscode.commands.executeCommand("workbench.action.openSettings", "portal."); break;
     }
+  }
+
+  // Connection fields are written onto the active profile when one is selected;
+  // otherwise they go to the plain portal.* settings as before.
+  private async writeConnField(patch: Partial<ConnectionProfile>): Promise<void> {
+    const cfg = readConfig();
+    if (cfg.activeProfile) {
+      await patchProfile(cfg.activeProfile, patch);
+    } else {
+      for (const [key, value] of Object.entries(patch)) {
+        await (updateConfig as unknown as (key: string, value: unknown) => Promise<void>)(key, value);
+      }
+    }
+    this.refresh();
+  }
+
+  // Ask whether the running tunnel should be rebuilt after a profile switch
+  // (the tunnel reads its configuration once, at start time).
+  private async offerRestart(label: string): Promise<void> {
+    const st = this.bm.getState();
+    if (st.kind === "running" || st.kind === "starting") {
+      const answer = await vscode.window.showInformationMessage(t("profile.switchedRestart", label), t("profile.restartNow"));
+      if (answer) {
+        await this.bm.stop();
+        await this.bm.start();
+      }
+      return;
+    }
+    vscode.window.showInformationMessage(t("profile.switched", label));
   }
 
   async copyUrl(): Promise<void> {
@@ -347,6 +460,12 @@ function renderHtml(): string {
       <input id="ngrokDomain" type="text" placeholder="your-name.ngrok-free.dev" />
       <label class="check" style="margin-top:8px;"><input type="checkbox" id="ngrokPoolingEnabled" />${t("settings.ngrokPoolingEnabled")}</label>
       <div class="hint">${t("settings.ngrokPoolingHint")}</div>
+      <div class="label" style="margin-top:10px;">${t("settings.ngrokConfigPath")}</div>
+      <input id="ngrokConfigPath" type="text" placeholder="C:\\ngrok\\account-a.yml" />
+      <div class="hint">${t("settings.ngrokConfigPathHint")}</div>
+      <div class="label" style="margin-top:10px;">${t("settings.ngrokApiPort")}</div>
+      <input id="ngrokApiPort" type="number" min="0" max="65535" placeholder="4040" />
+      <div class="hint">${t("settings.ngrokApiPortHint")}</div>
     </div>
     <div id="cfDomainBox" style="display:none;">
       <div class="label">${t("settings.cfHostname")}</div>
@@ -384,6 +503,94 @@ function renderHtml(): string {
     <div class="small" id="cfNamedDiag">${t("settings.cfNamedConfig")}: &mdash;</div>
     <div class="small" id="ngVer">ngrok: &mdash;</div>
     <div class="small muted" id="diagErr" style="margin-top:6px;"></div>
+  </div>
+
+  <h2>${t("profile.sectionTitle")}</h2>
+  <div class="card">
+    <div class="small muted">${t("profile.hint")}</div>
+    <div id="profileList" style="margin-top:8px;"></div>
+    <div id="profileEditor" style="display:none; margin-top:10px; border:1px solid var(--border); padding:10px;">
+      <div class="label" id="profileEditorTitle">${t("profile.newTitle")}</div>
+      <input id="pfName" type="text" placeholder="${t("profile.namePlaceholder")}" />
+      <div class="label" style="margin-top:8px;">${t("settings.tunnelMode")}</div>
+      <select id="pfProvider">
+        <option value="">${t("profile.defaultOption")}</option>
+        <option value="ngrok-reserved">${t("provider.ngrok-reserved.name")}</option>
+        <option value="cloudflare-quick">${t("provider.cloudflare-quick.name")}</option>
+        <option value="cloudflare-named">${t("provider.cloudflare-named.name")}</option>
+        <option value="custom">${t("provider.custom.name")}</option>
+      </select>
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokDomain")}</div>
+      <input id="pfNgrokDomain" type="text" placeholder="your-name.ngrok-free.dev" />
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokConfigPath")}</div>
+      <input id="pfNgrokConfigPath" type="text" placeholder="C:\\ngrok\\account-a.yml" />
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokApiPort")}</div>
+      <input id="pfNgrokApiPort" type="number" min="0" max="65535" placeholder="4040" />
+      <label class="check" style="margin-top:8px;"><input type="checkbox" id="pfNgrokPooling" />${t("settings.ngrokPoolingEnabled")}</label>
+      <div class="label" style="margin-top:8px;">${t("settings.cfHostname")}</div>
+      <input id="pfCfDomain" type="text" placeholder="bridge.example.com" />
+      <div class="label" style="margin-top:8px;">${t("settings.customCommand")}</div>
+      <input id="pfCustomCommand" type="text" placeholder="cloudflared tunnel --url http://127.0.0.1:{{port}}" />
+      <div class="label" style="margin-top:8px;">${t("settings.customUrl")}</div>
+      <input id="pfCustomUrl" type="text" placeholder="https://tunnel.example.com" />
+      <div class="label" style="margin-top:8px;">${t("settings.secretPath")}</div>
+      <input id="pfRouteToken" type="password" placeholder="/mcp/&lt;token&gt;" />
+      <div class="label" style="margin-top:8px;">${t("settings.localPort")}</div>
+      <input id="pfLocalPort" type="number" min="0" max="65535" placeholder="0" />
+      <div class="row" style="margin-top:12px;">
+        <button id="pfSave" class="primary small" style="flex:none;">${t("profile.save")}</button>
+        <button id="pfCancel" class="small" style="flex:none;">${t("profile.cancel")}</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <button id="profileNew" class="small" style="flex:none;">${t("profile.new")}</button>
+    </div>
+  </div>
+
+  <h2>${t("session.sectionTitle")}</h2>
+  <div class="card">
+    <div class="small muted">${t("session.hint")}</div>
+    <div id="sessionList" style="margin-top:8px;"></div>
+    <div id="sessionEditor" style="display:none; margin-top:10px; border:1px solid var(--border); padding:10px;">
+      <div class="label" id="sessionEditorTitle">${t("session.newTitle")}</div>
+      <div class="label" style="margin-top:8px;">${t("session.idLabel")}</div>
+      <input id="seId" type="text" placeholder="workspace-a" />
+      <div class="label" style="margin-top:8px;">${t("session.labelLabel")}</div>
+      <input id="seLabel" type="text" placeholder="Workspace A" />
+      <div class="label" style="margin-top:8px;">${t("session.tokenLabel")}</div>
+      <input id="seRouteToken" type="password" placeholder="${t("session.tokenPlaceholder")}" />
+      <div class="label" style="margin-top:8px;">${t("session.workspaceLabel")}</div>
+      <input id="seWorkspace" type="text" placeholder="E:\\repos\\project-a" />
+      <div class="label" style="margin-top:8px;">${t("settings.tunnelMode")}</div>
+      <select id="seProvider">
+        <option value="">${t("profile.defaultOption")}</option>
+        <option value="ngrok-reserved">${t("provider.ngrok-reserved.name")}</option>
+        <option value="cloudflare-quick">${t("provider.cloudflare-quick.name")}</option>
+        <option value="cloudflare-named">${t("provider.cloudflare-named.name")}</option>
+        <option value="custom">${t("provider.custom.name")}</option>
+      </select>
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokDomain")}</div>
+      <input id="seNgrokDomain" type="text" placeholder="your-name.ngrok-free.dev" />
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokConfigPath")}</div>
+      <input id="seNgrokConfigPath" type="text" placeholder="C:\\ngrok\\account-a.yml" />
+      <div class="label" style="margin-top:8px;">${t("settings.ngrokApiPort")}</div>
+      <input id="seNgrokApiPort" type="number" min="0" max="65535" placeholder="4040" />
+      <div class="label" style="margin-top:8px;">${t("settings.cfHostname")}</div>
+      <input id="seCfDomain" type="text" placeholder="bridge.example.com" />
+      <div class="label" style="margin-top:8px;">${t("settings.customCommand")}</div>
+      <input id="seCustomCommand" type="text" placeholder="cloudflared tunnel --url http://127.0.0.1:{{port}}" />
+      <div class="label" style="margin-top:8px;">${t("settings.customUrl")}</div>
+      <input id="seCustomUrl" type="text" placeholder="https://tunnel.example.com" />
+      <div class="label" style="margin-top:8px;">${t("settings.localPort")}</div>
+      <input id="seLocalPort" type="number" min="0" max="65535" placeholder="0" />
+      <div class="row" style="margin-top:12px;">
+        <button id="seSave" class="primary small" style="flex:none;">${t("profile.save")}</button>
+        <button id="seCancel" class="small" style="flex:none;">${t("profile.cancel")}</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <button id="sessionNew" class="small" style="flex:none;">${t("session.new")}</button>
+    </div>
   </div>
 
   <h2>${t("settings.section.security")}</h2>
@@ -480,6 +687,8 @@ function renderHtml(): string {
       if (cfg) {
         $('ngrokDomain').value = cfg.ngrokDomain || '';
         $('ngrokPoolingEnabled').checked = !!cfg.ngrokPoolingEnabled;
+        $('ngrokConfigPath').value = cfg.ngrokConfigPath || '';
+        $('ngrokApiPort').value = cfg.ngrokApiPort || '';
         $('cfDomain').value = cfg.cloudflareDomain || '';
         $('customCommand').value = cfg.customTunnelCommand || '';
         $('customUrl').value = cfg.customTunnelUrl || '';
@@ -582,6 +791,136 @@ function renderHtml(): string {
       $('promptCancel').style.display = 'none';
     }
 
+    let profilesData = { list: [], active: '' };
+    let editingProfile = null;
+
+    const summaryOf = (p) => {
+      const parts = [];
+      if (p.tunnelProvider) parts.push(p.tunnelProvider);
+      if (p.ngrokDomain) parts.push(p.ngrokDomain);
+      if (p.cloudflareDomain) parts.push(p.cloudflareDomain);
+      if (p.customTunnelUrl) parts.push(p.customTunnelUrl);
+      if (p.ngrokConfigPath) parts.push('--config ' + p.ngrokConfigPath);
+      if (p.ngrokApiPort) parts.push(':' + p.ngrokApiPort);
+      if (p.routeToken) parts.push('token');
+      return parts.join(' \\u00b7 ');
+    };
+
+    function renderProfiles(cfg) {
+      if (!cfg) return;
+      profilesData = { list: cfg.connectionProfiles || [], active: cfg.activeProfile || '' };
+      const root = $('profileList'); root.innerHTML = '';
+      if (!profilesData.list.length) {
+        root.innerHTML = '<div class="small muted">' + esc(t('profile.empty')) + '</div>';
+        return;
+      }
+      for (const p of profilesData.list) {
+        const isActive = p.name === profilesData.active;
+        const div = document.createElement('div');
+        div.className = 'tpl';
+        div.innerHTML =
+          '<div class="tpl-head">' +
+            '<span class="tpl-name">' + esc(p.name) + '</span>' +
+            (isActive ? '<span class="tpl-urltag">' + esc(t('profile.activeTag')) + '</span>' : '') +
+            '<button class="small" data-act="use">' + esc(t('profile.use')) + '</button>' +
+            '<button class="small" data-act="edit">' + esc(t('profile.edit')) + '</button>' +
+            '<button class="small" data-act="dup">' + esc(t('profile.duplicate')) + '</button>' +
+            '<button class="small danger" data-act="del">' + esc(t('profile.delete')) + '</button>' +
+          '</div>' +
+          '<div class="tpl-preview">' + esc(summaryOf(p)) + '</div>';
+        div.querySelector('[data-act=use]').addEventListener('click', () => vscode.postMessage({ type: 'profileActivate', name: p.name }));
+        div.querySelector('[data-act=edit]').addEventListener('click', () => openProfileEditor(p.name));
+        div.querySelector('[data-act=dup]').addEventListener('click', () => vscode.postMessage({ type: 'profileDuplicate', name: p.name }));
+        div.querySelector('[data-act=del]').addEventListener('click', () => vscode.postMessage({ type: 'profileDelete', name: p.name }));
+        root.appendChild(div);
+      }
+    }
+
+    function openProfileEditor(name) {
+      const p = name ? (profilesData.list.find((x) => x.name === name) || null) : null;
+      editingProfile = p ? p.name : null;
+      $('profileEditorTitle').textContent = p ? t('profile.editorTitle') : t('profile.newTitle');
+      $('pfName').value = p ? p.name : '';
+      $('pfProvider').value = (p && p.tunnelProvider) || '';
+      $('pfNgrokDomain').value = (p && p.ngrokDomain) || '';
+      $('pfNgrokConfigPath').value = (p && p.ngrokConfigPath) || '';
+      $('pfNgrokApiPort').value = (p && p.ngrokApiPort) || '';
+      $('pfNgrokPooling').checked = !!(p && p.ngrokPoolingEnabled);
+      $('pfCfDomain').value = (p && p.cloudflareDomain) || '';
+      $('pfCustomCommand').value = (p && p.customTunnelCommand) || '';
+      $('pfCustomUrl').value = (p && p.customTunnelUrl) || '';
+      $('pfRouteToken').value = (p && p.routeToken) || '';
+      $('pfLocalPort').value = (p && typeof p.localPort === 'number') ? p.localPort : '';
+      $('profileEditor').style.display = '';
+      $('pfName').focus();
+    }
+
+    function closeProfileEditor() { editingProfile = null; $('profileEditor').style.display = 'none'; }
+
+    let sessionsData = { list: [], active: '' };
+    let editingSession = null;
+
+    const sessionSummary = (s) => {
+      const parts = [];
+      parts.push(s.id === s.label ? s.id : (s.label + ' (' + s.id + ')'));
+      if (s.routeToken) parts.push('token ' + s.routeToken.slice(0, 6) + '\u2026');
+      if (s.workspacePath) parts.push(s.workspacePath);
+      if (s.tunnelProvider) parts.push(s.tunnelProvider);
+      if (s.ngrokDomain) parts.push(s.ngrokDomain);
+      if (s.ngrokConfigPath) parts.push('--config ' + s.ngrokConfigPath);
+      if (s.ngrokApiPort) parts.push(':' + s.ngrokApiPort);
+      return parts.join(' \\u00b7 ');
+    };
+
+    function renderSessions(cfg) {
+      if (!cfg) return;
+      sessionsData = { list: cfg.tokens || [], active: cfg.activeTokenId || '' };
+      const root = $('sessionList'); root.innerHTML = '';
+      if (!sessionsData.list.length) {
+        root.innerHTML = '<div class="small muted">' + esc(t('session.empty')) + '</div>';
+        return;
+      }
+      for (const s of sessionsData.list) {
+        const isActive = s.id === sessionsData.active;
+        const div = document.createElement('div');
+        div.className = 'tpl';
+        div.innerHTML =
+          '<div class="tpl-head">' +
+            '<span class="tpl-name">' + esc(s.label) + '</span>' +
+            (isActive ? '<span class="tpl-urltag">' + esc(t('profile.activeTag')) + '</span>' : '') +
+            '<button class="small" data-act="use">' + esc(t('profile.use')) + '</button>' +
+            '<button class="small" data-act="edit">' + esc(t('profile.edit')) + '</button>' +
+            '<button class="small danger" data-act="del">' + esc(t('profile.delete')) + '</button>' +
+          '</div>' +
+          '<div class="tpl-preview">' + esc(sessionSummary(s)) + '</div>';
+        div.querySelector('[data-act=use]').addEventListener('click', () => vscode.postMessage({ type: 'sessionActivate', id: s.id }));
+        div.querySelector('[data-act=edit]').addEventListener('click', () => openSessionEditor(s.id));
+        div.querySelector('[data-act=del]').addEventListener('click', () => vscode.postMessage({ type: 'sessionDelete', id: s.id }));
+        root.appendChild(div);
+      }
+    }
+
+    function openSessionEditor(id) {
+      const s = id ? (sessionsData.list.find((x) => x.id === id) || null) : null;
+      editingSession = s ? s.id : null;
+      $('sessionEditorTitle').textContent = s ? t('session.editorTitle') : t('session.newTitle');
+      $('seId').value = s ? s.id : '';
+      $('seLabel').value = s ? s.label : '';
+      $('seRouteToken').value = s ? (s.routeToken || '') : '';
+      $('seWorkspace').value = s ? (s.workspacePath || '') : '';
+      $('seProvider').value = (s && s.tunnelProvider) || '';
+      $('seNgrokDomain').value = (s && s.ngrokDomain) || '';
+      $('seNgrokConfigPath').value = (s && s.ngrokConfigPath) || '';
+      $('seNgrokApiPort').value = (s && s.ngrokApiPort) || '';
+      $('seCfDomain').value = (s && s.cloudflareDomain) || '';
+      $('seCustomCommand').value = (s && s.customTunnelCommand) || '';
+      $('seCustomUrl').value = (s && s.customTunnelUrl) || '';
+      $('seLocalPort').value = (s && typeof s.localPort === 'number') ? s.localPort : '';
+      $('sessionEditor').style.display = '';
+      $('seId').focus();
+    }
+    function closeSessionEditor() { editingSession = null; $('sessionEditor').style.display = 'none'; }
+
     function setDiag(d) {
       if (!d) { $('diagState').textContent = t('settings.notDetected'); return; }
       $('diagState').textContent = t('settings.detected');
@@ -620,6 +959,8 @@ function renderHtml(): string {
     $('refreshDiag').addEventListener('click', () => vscode.postMessage({ type: 'refreshDiag' }));
     $('ngrokDomain').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokDomain', domain: e.target.value }));
     $('ngrokPoolingEnabled').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokPoolingEnabled', value: e.target.checked }));
+    $('ngrokConfigPath').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokConfigPath', path: e.target.value }));
+    $('ngrokApiPort').addEventListener('change', (e) => vscode.postMessage({ type: 'setNgrokApiPort', port: e.target.value }));
     $('cfDomain').addEventListener('change', (e) => vscode.postMessage({ type: 'setCloudflareDomain', domain: e.target.value }));
     $('customCommand').addEventListener('change', (e) => vscode.postMessage({ type: 'setCustomTunnelCommand', command: e.target.value }));
     $('customUrl').addEventListener('change', (e) => vscode.postMessage({ type: 'setCustomTunnelUrl', url: e.target.value }));
@@ -633,6 +974,57 @@ function renderHtml(): string {
     $('showLog').addEventListener('click', () => vscode.postMessage({ type: 'showLog' }));
     $('openSettingsJson').addEventListener('click', () => vscode.postMessage({ type: 'openSettingsJson' }));
     $('saveInstructions').addEventListener('click', () => vscode.postMessage({ type: 'setAgentInstructions', value: $('agentInstructions').value }));
+    $('sessionNew').addEventListener('click', () => openSessionEditor(null));
+    $('seCancel').addEventListener('click', closeSessionEditor);
+    $('seSave').addEventListener('click', () => {
+      const id = $('seId').value.trim();
+      if (!id) return;
+      const num = (v) => (String(v).trim() === '' ? undefined : Number(v));
+      vscode.postMessage({
+        type: 'sessionSave',
+        originalId: editingSession,
+        session: {
+          id: id,
+          label: $('seLabel').value.trim() || id,
+          routeToken: $('seRouteToken').value.trim() || undefined,
+          workspacePath: $('seWorkspace').value.trim() || undefined,
+          tunnelProvider: $('seProvider').value || undefined,
+          ngrokDomain: $('seNgrokDomain').value.trim() || undefined,
+          ngrokConfigPath: $('seNgrokConfigPath').value.trim() || undefined,
+          ngrokApiPort: num($('seNgrokApiPort').value),
+          cloudflareDomain: $('seCfDomain').value.trim() || undefined,
+          customTunnelCommand: $('seCustomCommand').value.trim() || undefined,
+          customTunnelUrl: $('seCustomUrl').value.trim() || undefined,
+          localPort: num($('seLocalPort').value),
+        },
+      });
+      closeSessionEditor();
+    });
+    $('profileNew').addEventListener('click', () => openProfileEditor(null));
+    $('pfCancel').addEventListener('click', closeProfileEditor);
+    $('pfSave').addEventListener('click', () => {
+      const name = $('pfName').value.trim();
+      if (!name) return;
+      const num = (v) => (String(v).trim() === '' ? undefined : Number(v));
+      vscode.postMessage({
+        type: 'profileSave',
+        originalName: editingProfile,
+        profile: {
+          name: name,
+          tunnelProvider: $('pfProvider').value || undefined,
+          ngrokDomain: $('pfNgrokDomain').value.trim() || undefined,
+          ngrokConfigPath: $('pfNgrokConfigPath').value.trim() || undefined,
+          ngrokApiPort: num($('pfNgrokApiPort').value),
+          ngrokPoolingEnabled: $('pfNgrokPooling').checked || undefined,
+          cloudflareDomain: $('pfCfDomain').value.trim() || undefined,
+          customTunnelCommand: $('pfCustomCommand').value.trim() || undefined,
+          customTunnelUrl: $('pfCustomUrl').value.trim() || undefined,
+          routeToken: $('pfRouteToken').value || undefined,
+          localPort: num($('pfLocalPort').value),
+        },
+      });
+      closeProfileEditor();
+    });
     $('promptSave').addEventListener('click', () => {
       const name = $('promptName').value.trim();
       const text = $('promptText').value.trim();
@@ -655,7 +1047,12 @@ function renderHtml(): string {
     window.addEventListener('message', (e) => {
       const m = e.data; if (!m) return;
       if (m.type === 'state') setState(m.state);
-      if (m.type === 'config') { latestConfig = m.config; renderProviders(m.config.tunnelProvider, m.config); }
+      if (m.type === 'config') {
+        latestConfig = m.config;
+        renderProviders(m.config.tunnelProvider, m.config);
+        renderProfiles(m.config);
+        renderSessions(m.config);
+      }
       if (m.type === 'diag') setDiag(m.diag);
       if (m.type === 'logs') setLogs(m.logs);
       if (m.type === 'tools') setTools(m.tools);

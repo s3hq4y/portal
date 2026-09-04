@@ -38,8 +38,20 @@
   "command.installCloudflared": "Portal: Install cloudflared",
   "command.installNgrok": "Portal: Install/Upgrade ngrok",
   "command.setTunnelProvider": "Portal: Set Tunnel Provider...",
+  "command.restart": "Portal: Restart",
+  "command.switchProfile": "Portal: Switch Connection Profile...",
+  "command.tokenSelect": "Portal: Select MCP Session",
+  "command.tokenAdd": "Portal: Add MCP Session",
+  "command.tokenRemove": "Portal: Remove MCP Session",
   "command.setNgrokDomain": "Portal: Set ngrok Domain...",
   "command.setRouteToken": "Portal: Set Route Token...",
   "command.showLog": "Portal: Show Log",
-  "command.showAgentTerminal": "Portal: Show Agent Terminal"
+  "command.showAgentTerminal": "Portal: Show Agent Terminal",
+
+  "config.ngrokConfigPath.desc": "Path to an ngrok agent configuration file passed to ngrok as `--config`. Point each VS Code window at a different file to run two ngrok accounts (two authtokens) side by side. Leave empty to use ngrok\u2019s default config file.",
+  "config.ngrokApiPort.desc": "Which local port Portal asks for the ngrok tunnel list. Concurrent ngrok agents cannot share a port \u2014 the second one silently moves to 4041 \u2014 so point the second window at 4041 to avoid a start-up wait. `0` (default) = scan 4040-4045 and match the tunnel by domain (this ngrok build has no `--web-addr` flag).",
+  "config.connectionProfiles.desc": "Named connection profiles (tunnel provider, domain, ngrok config file, route token, \u2026). The list is stored globally; manage it from the Portal settings page.",
+  "config.tokens.desc": "Independent MCP sessions (each = id, label, routeToken, optional workspacePath and tunnel overrides). Every session publishes its own public MCP endpoint and can run in parallel; the Portal sidebar picks which one is displayed.",
+  "config.activeTokenId.desc": "The session id currently shown by the Portal sidebar. Stored per workspace when a folder is open.",
+  "config.activeProfile.desc": "Name of the connection profile this workspace uses. Stored in the workspace (.vscode/settings.json) when a folder is open, so several VS Code windows can run different profiles at the same time. Switch it from the sidebar, the settings page, or **Portal: Switch Connection Profile**."
 }

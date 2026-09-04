@@ -2,7 +2,7 @@
   "name": "portal",
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "publisher": "s9y",
   "private": true,
   "license": "GPL-3.0-or-later",
@@ -76,6 +76,38 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "%config.ngrokPoolingEnabled.desc%"
+        },
+        "portal.ngrokConfigPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.ngrokConfigPath.desc%"
+        },
+        "portal.ngrokApiPort": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "%config.ngrokApiPort.desc%"
+        },
+        "portal.connectionProfiles": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "%config.connectionProfiles.desc%",
+          "items": { "type": "object", "properties": { "name": { "type": "string", "title": "Name" } }, "required": ["name"] }
+        },
+        "portal.activeProfile": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.activeProfile.desc%"
+        },
+        "portal.tokens": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "object" },
+          "markdownDescription": "%config.tokens.desc%"
+        },
+        "portal.activeTokenId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.activeTokenId.desc%"
         },
         "portal.cloudflareDomain": {
           "type": "string",
@@ -229,6 +261,31 @@
         "command": "portal.showAgentTerminal",
         "title": "%command.showAgentTerminal%",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "portal.restart",
+        "title": "%command.restart%",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "portal.switchProfile",
+        "title": "%command.switchProfile%",
+        "icon": "$(swap)"
+      },
+      {
+        "command": "portal.tokenSelect",
+        "title": "%command.tokenSelect%",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "portal.tokenAdd",
+        "title": "%command.tokenAdd%",
+        "icon": "$(add)"
+      },
+      {
+        "command": "portal.tokenRemove",
+        "title": "%command.tokenRemove%",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
