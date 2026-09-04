@@ -320,6 +320,31 @@ function bindBrowser() {
   el("bReloadBtn").addEventListener("click", () => portalApi.browserControl("reload"));
   el("bHomeBtn").addEventListener("click", () => portalApi.browserOpenEmbedded("https://www.bing.com"));
   el("bCloseBtn").addEventListener("click", () => closeBrowserPanel());
+  // CDP control of docked external browsers
+  const cdpPort = el("cdpPort");
+  const setCdp = (stat) => {
+    const s = el("cdpStatus"), d = el("bCdpDisconnect"), c = el("bCdpConnect");
+    if (!stat) { s.hidden = true; d.hidden = true; c.hidden = false; return; }
+    s.hidden = false;
+    const on = stat.connected;
+    c.hidden = on;
+    d.hidden = !on;
+    s.textContent = on ? ("CDP " + stat.port + (stat.url ? " · " + String(stat.url).slice(0, 40) : " · connected")) : ("CDP ✕ " + (stat.error || "not connected"));
+    s.className = "bp-cdp-status" + (on ? " ok" : " err");
+  };
+  el("bCdpConnect").addEventListener("click", async () => {
+    const res = await portalApi.browserCdpConnect(Number(cdpPort.value) || 9222);
+    if (!res?.ok) el("cdpStatus").textContent = "CDP ✕ " + (res?.error || "no page");
+    setCdp(await portalApi.browserCdpStatus());
+  });
+  el("bCdpDisconnect").addEventListener("click", async () => {
+    await portalApi.browserCdpDisconnect();
+    setCdp(await portalApi.browserCdpStatus());
+  });
+  cdpPort.addEventListener("change", () => { portalApi.browserCdpSetPort(Number(cdpPort.value) || 9222); });
+  // Listen for CDP status pushes from main.
+  portalApi.on("browser:cdpStatusEvent", (payload) => setCdp(payload?.status));
+  portalApi.browserCdpStatus().then((st) => setCdp(st)).catch(() => {});
   el("bRefreshBtn").addEventListener("click", renderBrowserWindows);
   el("bGrabBtn").addEventListener("click", () => {
     openBrowserPanel();

@@ -299,6 +299,13 @@
           <button class="btn" id="bRefreshBtn" title="Refresh list"><svg viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="btn icon" id="bCloseBtn" title="Close panel"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
+        <div class="bp-cdp" id="bpCdp">
+          <span class="bp-cdp-label" data-i18n="browser.cdp">Docked page control (CDP)</span>
+          <input id="cdpPort" class="bp-cdp-port" type="number" min="1" max="65535" value="9222" title="Chrome remote-debugging port" />
+          <button class="btn small" id="bCdpConnect" data-i18n="browser.cdpConnect">Connect</button>
+          <button class="btn small" id="bCdpDisconnect" hidden>Disconnect</button>
+          <span class="bp-cdp-status" id="cdpStatus" hidden></span>
+        </div>
         <div class="bp-wins" id="bpWins" hidden>
           <div class="bp-wins-scroll" id="bpWinsScroll"></div>
         </div>

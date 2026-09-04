@@ -62,6 +62,10 @@ export const CH = {
   BrowserDockDragMove: "browser:dockDragMove",
   BrowserDockDragEnd: "browser:dockDragEnd",
   BrowserDockUndock: "browser:dockUndock",
+  BrowserCdpStatus: "browser:cdpStatus",
+  BrowserCdpConnect: "browser:cdpConnect",
+  BrowserCdpDisconnect: "browser:cdpDisconnect",
+  BrowserCdpSetPort: "browser:cdpSetPort",
 
   // window chrome
   WinMinimize: "win:minimize",
@@ -85,6 +89,7 @@ export const CH = {
   EvBrowserAttached: "browser:attachedChanged",
   EvBrowserGrab: "browser:grabState",
   EvBrowserEmbedState: "browser:embedState",
+  EvBrowserCdpStatus: "browser:cdpStatusEvent",
   DockTitle: "dock:title",
 } as const;
 
@@ -191,6 +196,10 @@ export interface PortalApi {
   browserDockDragMove(x: number, y: number): Promise<void>;
   browserDockDragEnd(): Promise<void>;
   browserDockUndock(): Promise<void>;
+  browserCdpStatus(): Promise<{ connected: boolean; port: number; url?: string; title?: string; error?: string }>;
+  browserCdpConnect(port?: number, title?: string): Promise<{ ok: boolean; error?: string }>;
+  browserCdpDisconnect(): Promise<void>;
+  browserCdpSetPort(port?: number): Promise<number>;
 
   // window chrome
   winMinimize(): Promise<void>;

@@ -53,6 +53,10 @@ const api: PortalApi = {
   browserDockDragMove: (x, y) => invoke(CH.BrowserDockDragMove, x, y),
   browserDockDragEnd: () => invoke(CH.BrowserDockDragEnd),
   browserDockUndock: () => invoke(CH.BrowserDockUndock),
+  browserCdpStatus: () => invoke(CH.BrowserCdpStatus),
+  browserCdpConnect: (port, title) => invoke(CH.BrowserCdpConnect, port, title),
+  browserCdpDisconnect: () => invoke(CH.BrowserCdpDisconnect),
+  browserCdpSetPort: (port) => invoke(CH.BrowserCdpSetPort, port),
 
   winMinimize: () => invoke(CH.WinMinimize),
   winMaximize: () => invoke(CH.WinMaximize),

@@ -20,6 +20,7 @@ import { generateRouteToken } from "./mcp-server";
 import { installCloudflaredViaWinget, installNgrokViaWinget } from "./tunnel";
 import { CaptureManager } from "./browser/capture-manager";
 import { EmbedManager } from "./browser/embed-manager";
+import { CdpController } from "./browser/cdp-controller";
 
 const isWindows = process.platform === "win32";
 const isWin11 = isWindows && /windows nt 10\.0\.(2[2-9]\d\d|[3-9]\d{3,})/i.test(release());
@@ -34,6 +35,9 @@ const logger = new Logger();
 const bridge = new BridgeManager(logger);
 let capture: CaptureManager | null = null;
 let embed: EmbedManager | null = null;
+let cdp: CdpController | null = null;
+/** CDP remote-debugging port used to control a docked external browser. */
+let cdpPort = 9222;
 
 const PRELOAD = path.join(__dirname, "../preload.js");
 const RENDERER = path.join(__dirname, "../renderer/index.html");
@@ -375,8 +379,15 @@ function registerIpc(): void {
     embed?.close();
     applyBrowserLayout();
   });
-  ipcMain.handle(CH.BrowserNavigate, (_e, url: string) => embed?.navigate(String(url ?? "")));
-  ipcMain.handle(CH.BrowserControl, (_e, action: "back" | "forward" | "reload" | "stop") => embed?.control(action));
+  ipcMain.handle(CH.BrowserNavigate, (_e, url: string) => {
+    // If a docked external browser is under CDP control, drive it; otherwise the embedded view.
+    if (cdpControllerLive()) return cdp?.navigate(String(url ?? ""));
+    return embed?.navigate(String(url ?? ""));
+  });
+  ipcMain.handle(CH.BrowserControl, (_e, action: "back" | "forward" | "reload" | "stop") => {
+    if (cdpControllerLive()) return cdp?.control(action);
+    return embed?.control(action);
+  });
   ipcMain.handle(CH.BrowserEmbedBounds, (_e, rect: { x: number; y: number; width: number; height: number } | null) => {
     const r = rect && Number.isFinite(rect.x) && rect.width > 0 && rect.height > 0 ? rect : null;
     lastBrowserRect = r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
@@ -387,6 +398,15 @@ function registerIpc(): void {
   ipcMain.handle(CH.BrowserDockDragEnd, () => capture?.endDockDrag());
   ipcMain.handle(CH.BrowserDockUndock, () => capture?.undockFromHandle());
 
+  // --- CDP control of docked external browsers ---
+  ipcMain.handle(CH.BrowserCdpStatus, () => cdp?.getStatus() ?? { connected: false, port: cdpPort });
+  ipcMain.handle(CH.BrowserCdpConnect, async (_e, port?: number, title?: string) => {
+    cdpPort = Number(port) || 9222;
+    return cdp?.connect(cdpPort, title ? String(title) : undefined);
+  });
+  ipcMain.handle(CH.BrowserCdpDisconnect, () => cdp?.close());
+  ipcMain.handle(CH.BrowserCdpSetPort, (_e, port?: number) => { cdpPort = Number(port) || 9222; return cdpPort; });
+
   // window chrome
   ipcMain.handle(CH.WinMinimize, () => mainWindow?.minimize());
   ipcMain.handle(CH.WinMaximize, () => {
@@ -395,6 +415,11 @@ function registerIpc(): void {
   });
   ipcMain.handle(CH.WinClose, () => mainWindow?.close());
   ipcMain.handle(CH.WinIsMaximized, () => mainWindow?.isMaximized() ?? false);
+}
+
+/** True when a CDP session is connected (i.e. we can control a docked external browser). */
+function cdpControllerLive(): boolean {
+  return cdp?.getStatus().connected ?? false;
 }
 
 function sanitizePrompt(p: any): { name: string; text: string } {
@@ -427,6 +452,8 @@ if (!gotLock) {
     );
     embed = new EmbedManager(mainWindow);
     embed.onNavigationState((info) => send(CH.EvBrowserEmbedState, { info }));
+    cdp = new CdpController(cdpPort);
+    cdp.onStatus((status) => send(CH.EvBrowserCdpStatus, { status }));
 
     wireBridgeEvents();
     registerIpc();
