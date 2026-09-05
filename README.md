@@ -11,11 +11,12 @@ The same idea ships in two forms in this repository:
 | App | Folder | What it is |
 | --- | --- | --- |
 | **Portal Client** | [`client/`](client/README.md) | Standalone **Windows** desktop app (Electron + Fluent UI). No VS Code required. Adds native **browser-window docking**. |
-| **Portal (VS Code extension)** | [`vscode-extension/`](vscode-extension/README.md) | The original VS Code extension. |
+| **Portal (VS Code extension)** | [`vscode-extension/`](vscode-extension/README.md) | The original VS Code extension. Full manual: [User Guide](vscode-extension/USAGE.md). |
 
 > 📖 Start with the README of the app you actually want to run:
 > - **Client →** [`client/README.md`](client/README.md) · [简体中文](client/README.md)
 > - **Extension →** [`vscode-extension/README.md`](vscode-extension/README.md) · [简体中文](vscode-extension/README.zh-CN.md)
+>   - 📘 **Extension User Guide** (install, tunnels, client setup, tool & file-API reference, troubleshooting) → [`vscode-extension/USAGE.md`](vscode-extension/USAGE.md) · [简体中文](vscode-extension/USAGE.zh-CN.md)
 
 ## What you get (both forms)
 
@@ -32,7 +33,7 @@ The same idea ships in two forms in this repository:
 ## Which one should I use?
 
 - **No VS Code, want a dedicated app, or want to dock your real browser inside it?** → [`client/`](client/README.md)
-- **Already live inside VS Code?** → [`vscode-extension/`](vscode-extension/README.md)
+- **Already live inside VS Code?** → [`vscode-extension/`](vscode-extension/README.md) — then read the [User Guide](vscode-extension/USAGE.md)
 
 Both expose the **same MCP contract** — they are drop-in replacements for each other (and for a single folder, run one of them at a time).
 
@@ -41,7 +42,7 @@ Both expose the **same MCP contract** — they are drop-in replacements for each
 ```
 portal/
   client/             Portal Client — Electron desktop app (Windows)
-  vscode-extension/   Portal — VS Code extension
+  vscode-extension/   Portal — VS Code extension  (USAGE.md = user guide)
   resources/          logos
   LICENSE             GNU General Public License v3
 ```

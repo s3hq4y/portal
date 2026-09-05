@@ -4,6 +4,8 @@
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
 
+> 📘 Looking for the full manual (installation, every tunnel provider, client setup, tool & file-API reference, troubleshooting)? Read the **[User Guide](USAGE.md)**.
+
 Portal is a VS Code extension that exposes the current workspace as a **public MCP endpoint**. It is deliberately small: **commands and file transfer only**.
 
 Connect any MCP client (Claude, ChatGPT, Cursor, a custom agent, `curl`) to your machine over a tunnel. The agent can run shells and move files.
