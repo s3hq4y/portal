@@ -4,6 +4,8 @@
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
 
+> 📘 想看完整手册（安装、各隧道方式、客户端接入、工具与文件 API 参考、故障排查）？请阅读 **[使用文档](USAGE.zh-CN.md)**。
+
 Portal 是一个 VS Code 扩展，把当前工作区暴露成 **公开 MCP 端点**。刻意做得很小：**只有命令执行和文件传输**。
 
 任意 MCP 客户端（Claude、ChatGPT、Cursor、自写 Agent、`curl`）都可以通过隧道连到你的机器：跑 shell、搬文件。

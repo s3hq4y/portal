@@ -11,11 +11,12 @@ Portal 把本地文件夹变成一个 **公开 MCP（Model Context Protocol）�
 | 应用 | 目录 | 是什么 |
 | --- | --- | --- |
 | **Portal Client** | [`client/`](client/README.md) | 独立的 **Windows** 桌面应用（Electron + Fluent UI），不依赖 VS Code，额外支持**原生浏览器窗口停靠**。 |
-| **Portal（VS Code 扩展）** | [`vscode-extension/`](vscode-extension/README.zh-CN.md) | 最初的 VS Code 扩展。 |
+| **Portal（VS Code 扩展）** | [`vscode-extension/`](vscode-extension/README.zh-CN.md) | 最初的 VS Code 扩展。完整手册：[使用文档](vscode-extension/USAGE.zh-CN.md)。 |
 
 > 📖 请直接阅读你要用的那个应用的 README：
 > - **Client →** [`client/README.md`](client/README.md)（中文）
 > - **扩展 →** [`vscode-extension/README.zh-CN.md`](vscode-extension/README.zh-CN.md)（中文） · [English](vscode-extension/README.md)
+>   - 📘 **扩展使用文档**（安装、隧道配置、客户端接入、工具与文件 API 参考、故障排查）→ [`vscode-extension/USAGE.zh-CN.md`](vscode-extension/USAGE.zh-CN.md) · [English](vscode-extension/USAGE.md)
 
 ## 两种形态都提供
 
@@ -32,7 +33,7 @@ Portal 把本地文件夹变成一个 **公开 MCP（Model Context Protocol）�
 ## 我该用哪一个？
 
 - **不想装/开 VS Code，想要独立应用，或者想把真正的浏览器窗口停靠进来？** → [`client/`](client/README.md)
-- **日常就泡在 VS Code 里？** → [`vscode-extension/`](vscode-extension/README.zh-CN.md)
+- **日常就泡在 VS Code 里？** → [`vscode-extension/`](vscode-extension/README.zh-CN.md)，然后阅读[使用文档](vscode-extension/USAGE.zh-CN.md)
 
 两者暴露的是**同一套 MCP 协议**，可以互相替换（同一个文件夹同一时刻跑其中一个即可）。
 
@@ -41,7 +42,7 @@ Portal 把本地文件夹变成一个 **公开 MCP（Model Context Protocol）�
 ```
 portal/
   client/             Portal Client —— Electron 桌面应用（Windows）
-  vscode-extension/   Portal —— VS Code 扩展
+  vscode-extension/   Portal —— VS Code 扩展（USAGE.zh-CN.md = 使用文档）
   resources/          徽标
   LICENSE             GNU 通用公共许可证 v3
 ```
