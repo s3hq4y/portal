@@ -46,7 +46,7 @@ Portal turns the VS Code workspace you have open into a **public MCP (Model Cont
 - The extension listens **only on loopback** (`127.0.0.1`); public exposure is entirely the tunnel's job.
 - The public URL embeds a **route token** in its path: `/mcp/<token>`. The token *is* the password — whoever has the URL can run commands in your workspace.
 - MCP and the file API share the same tunnel and the same token.
-- Exactly **five** MCP tools are exposed: `run_command`, `start_command`, `read_command`, `stop_command`, `file_transfer_info`. There are **no** `read_file` / `write_file` / `edit_file` / `search` tools — files are read and written via the shell or the HTTP file API.
+- Four command tools and `file_transfer_info` remain available; nine native text/upload tools are now also exposed. See [File tools](FILE-TOOLS.md) for limits and concurrency rules.
 
 > ⚠️ **Testing status:** only the **ngrok reserved-domain** tunnel has been exercised in real use. Cloudflare Quick / Named and custom tunnels are implemented but **not thoroughly tested** — treat them as experimental.
 
@@ -463,7 +463,7 @@ Base: `{base} = https://<host>/files/<token>` (same tunnel and token as MCP). Ev
 | `GET {base}?op=info` | capabilities, workspace path, size cap, endpoint table | `200` JSON |
 | `GET {base}?glob=<pattern>&path=<dir>` | recursive listing (defaults `**/*`, `.`); `glob` supports `*`, `**`, `?` | `200` `{ok, root, count, files:[{path,size,mtime,kind}]}` |
 | `GET {base}/<relpath>` | download; single `Range` supported (incl. suffix `bytes=-n`) | `200` / `206`, see headers |
-| `HEAD {base}/<relpath>` | metadata only | `200` + same headers |
+| `HEAD {base}/<relpath>` | metadata only; no full-file hash | `200` + size/mtime headers |
 | `GET {base}/<dir>` | same as listing that directory | `200` JSON |
 | `PUT {base}/<relpath>[?overwrite=false]` | upload (parents created; temp file + atomic rename) | new `201` / replaced `200`, `{ok,path,bytes,sha256,overwritten}` |
 | `DELETE {base}/<relpath>` | delete a single file (directories refused) | `200` `{ok,deleted}` |
@@ -755,7 +755,7 @@ Source map (`src/`):
 | `bridge-manager.ts` | lifecycle of one session: HTTP server → tunnel → stats & activity feed |
 | `mcp-server.ts` | hand-rolled MCP Streamable HTTP (JSON-RPC) server, default agent instructions |
 | `tunnel.ts` | ngrok / cloudflared quick / named / custom start-up, readiness, process cleanup |
-| `tools/` | the five tools, process spawning, background registry |
+| `tools/` | command/native file tools, process spawning, background registry |
 | `files/` | HTTP file API, path safety (workspace jail + deny list), zip, WSL I/O |
 | `config.ts` · `profiles.ts` | settings access, profile/session overlay logic |
 | `settings-page.ts` · `sidebar/panel.ts` · `status-bar.ts` · `agent-terminal.ts` | UI |
@@ -766,9 +766,9 @@ Source map (`src/`):
 
 ## 17. FAQ
 
-**Why are there no `read_file` / `write_file` tools?**
+**Which file tools should I use?**
 A deliberate trade-off: a smaller tool surface is harder for agents to misuse and simpler to serve. Read with `run_command` (`Get-Content`, `type`, `cat`) or the file API `GET`; write with the file API `PUT` (atomic, SHA-256 returned) or shell redirection.
-
+Use native `read_file` / `write_file` / `apply_patch` for source edits, and native upload sessions or HTTP for binary transfers. See [File tools](FILE-TOOLS.md).
 **How does the AI learn the file API address?**
 The `initialize` instructions end with it, and `file_transfer_info` returns the complete endpoint table with examples.
 
@@ -796,3 +796,5 @@ The server reports `2024-11-05`; clients initialising with a newer version still
 ---
 
 *Written for Portal extension 1.1.0; the source code is authoritative.*
+
+> File API compatibility update: HEAD omits full-file hashes; Range is limited to 4 MiB and returns a weak ETag/X-Range-Sha256, not an overwrite hash. See [File tools](FILE-TOOLS.md).

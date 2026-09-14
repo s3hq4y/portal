@@ -17,6 +17,8 @@ export interface ToolCallResult {
 // command runner, and file-transfer info (set once the bridge is running).
 export interface ToolContext {
   workspaceRoot: string;
+  fileSignal?: AbortSignal;
+  uploadSessions?: import("../files/upload-sessions").UploadSessions;
   resolve(p: string): string;
   commandRunner?: CommandRunner;
   backgroundCommands?: BackgroundCommandRegistry;

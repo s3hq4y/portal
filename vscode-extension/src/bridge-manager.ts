@@ -197,13 +197,18 @@ export class BridgeManager {
         filesBaseUrl: filesBase,
         wslDistro: ws.wslDistro,
         posixRoot: ws.posixRoot,
-        onTransfer: (info) => this.recordRequestEnd({
-          tool: "file_http",
-          ok: info.ok,
-          durationMs: 0,
-          args: { op: info.op, path: info.path },
-          resultText: info.detail ?? (info.bytes != null ? `bytes=${info.bytes}` : ""),
-        }),
+        onTransfer: (info) => {
+          const line = JSON.stringify({ requestId: info.requestId, phase: info.phase, op: info.op,
+            path: info.path, durationMs: info.durationMs, bytes: info.bytes, detail: info.detail });
+          this.log(info.ok ? "info" : "warn", `[file_http] ${line}`);
+          if (info.phase === "start") { this.recordRequestStart(); return; }
+          if (info.phase === "progress") return;
+          this.recordRequestEnd({
+            tool: "file_http", ok: info.ok, durationMs: info.durationMs ?? 0,
+            args: { op: info.op, path: info.path, requestId: info.requestId, phase: info.phase },
+            resultText: line,
+          });
+        },
       });
 
       this.setState({

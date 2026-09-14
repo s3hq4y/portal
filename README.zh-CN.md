@@ -50,3 +50,6 @@ portal/
 ## 许可证
 
 [GNU 通用公共许可证 v3](LICENSE) —— GPL-3.0-or-later。
+
+## VS Code 扩展文件工具更新
+扩展新增原生文本读写、精确补丁、目录分页及可重试分块上传。HTTP与MCP共用路径检查、写入锁及发布原语。详见 [文件工具文档](vscode-extension/FILE-TOOLS.zh-CN.md)。本次未移植独立桌面client中的复制实现；其文件工具能力与扩展暂不一致。

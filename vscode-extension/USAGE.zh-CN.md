@@ -46,7 +46,7 @@ Portal 把你当前打开的 VS Code 工作区变成一个 **公开的 MCP（Mod
 - 扩展在本机 **只监听回环地址** `127.0.0.1`，对外暴露完全依赖隧道。
 - 公开 URL 的路径里嵌着一个 **路由令牌（route token）**：`/mcp/<token>`。令牌就是密码，拿到 URL 的人就能在你的工作区里跑命令。
 - MCP 与文件 API 共用同一个隧道、同一个令牌。
-- 扩展 **恰好** 暴露 5 个 MCP 工具：`run_command`、`start_command`、`read_command`、`stop_command`、`file_transfer_info`。**没有** `read_file` / `write_file` / `edit_file` / `search` 之类的工具——读写文件要么走 shell，要么走 HTTP 文件 API。
+- 保留4个命令工具及`file_transfer_info`，新增9个原生文本/上传工具；限制及并发规则见[文件工具说明](FILE-TOOLS.zh-CN.md)。
 
 > ⚠️ **测试状态**：目前只有 **ngrok 预留域名** 这一种隧道方式经过实际使用验证。Cloudflare Quick / Named 与自定义隧道已实现但**未充分测试**，请当作实验性功能。
 
@@ -598,7 +598,7 @@ agent:
 
 ### 11.2 Agent 提示词（`portal.agentInstructions`）
 
-MCP 客户端在 `initialize` 时会收到一段 `instructions`，Portal 内置的默认版本告诉 Agent：如何复用会话 ID、`run_command` 与后台命令的用法、shell 的选择、WSL 的注意事项、没有文件编辑工具要走 HTTP 文件 API、破坏性操作前先询问。
+MCP 客户端在 `initialize` 时会收到一段 `instructions`，Portal 内置的默认版本告诉 Agent：如何复用会话 ID、`run_command` 与后台命令的用法、shell 的选择、WSL 的注意事项、优先使用原生文件工具及条件写入，需要时使用HTTP文件API、破坏性操作前先询问。
 
 想换成自己的：设置页 → **Agent 提示词** 里填写并保存，或直接编辑 `portal.agentInstructions`。留空 = 用默认。**下次启动 Portal 时生效。** 无论自定义与否，文件 API 地址附录都会附在末尾。
 
@@ -755,7 +755,7 @@ npm run watch        # 开发时持续构建
 | `bridge-manager.ts` | 一次会话的生命周期：起 HTTP 服务 → 起隧道 → 统计与活动流 |
 | `mcp-server.ts` | 手写的 MCP Streamable HTTP（JSON-RPC）服务，含默认 Agent 提示词 |
 | `tunnel.ts` | ngrok / cloudflared quick / named / custom 的启动、就绪判定、进程清理 |
-| `tools/` | 5 个工具的实现、进程 spawn、后台任务注册表 |
+| `tools/` | 命令/原生文件工具、进程 spawn、后台任务注册表 |
 | `files/` | HTTP 文件 API、路径安全（工作区围栏 + 拒绝列表）、zip、WSL IO |
 | `config.ts` · `profiles.ts` | 设置读取、档案/会话叠加逻辑 |
 | `settings-page.ts` · `sidebar/panel.ts` · `status-bar.ts` · `agent-terminal.ts` | UI |
@@ -766,9 +766,9 @@ npm run watch        # 开发时持续构建
 
 ## 17. 常见问题
 
-**为什么没有 `read_file` / `write_file` 工具？**
-设计取舍：工具面越小，Agent 越不容易误用，服务端也越简单。读文件用 `run_command`（`Get-Content`、`type`、`cat`）或文件 API 的 `GET`；写文件用文件 API 的 `PUT`（原子、带 SHA-256 校验），或 shell 重定向。
-
+**应该使用哪些文件工具？**
+文本文件优先使用原生工具，文件内容不必再放进命令输出；二进制文件可使用上传会话或HTTP。
+源码编辑使用原生`read_file` / `write_file` / `apply_patch`，二进制传输使用上传会话或HTTP，详见[文件工具说明](FILE-TOOLS.zh-CN.md)。
 **AI 怎么知道文件 API 地址？**
 `initialize` 返回的 instructions 末尾附了地址；调用 `file_transfer_info` 也会返回完整端点表和示例。
 
@@ -796,3 +796,5 @@ ngrok 预留域名、Cloudflare 命名隧道、自定义固定 URL：只要路�
 ---
 
 *本文档随 Portal 扩展 1.1.0 编写；行为以源码为准。*
+
+> 文件接口兼容性更新：HEAD不再返回全文哈希；Range最多4MiB，返回弱ETag与X-Range-Sha256，不可作为覆盖文件的SHA256。详细规则以[文件工具说明](FILE-TOOLS.zh-CN.md)为准。

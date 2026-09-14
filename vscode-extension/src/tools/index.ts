@@ -1,4 +1,4 @@
-// MCP tool registry. Portal is deliberately minimal: commands + file transfer.
+// MCP tool registry: commands, native text files and binary transfer.
 // The HTTP file API (files/http.ts) is the file-transfer backend and is
 // mounted by the MCP server rather than registered here.
 
@@ -9,6 +9,8 @@ import type { CommandRunner, ShellKind } from "./spawn";
 import { BackgroundCommandRegistry, type BackgroundCommandHooks } from "./background-registry";
 import { runCommand } from "./run-command";
 import { startCommand, readCommand, stopCommand } from "./background-command";
+import { fileTools } from "./file-tools";
+import { UploadSessions } from "../files/upload-sessions";
 import { fileTransferInfo } from "./file-transfer-info";
 
 export type { ToolDescriptor, ToolCallResult, ToolContext, ToolModule } from "./types";
@@ -24,19 +26,21 @@ export type {
 export type { BackgroundCommandHooks, BackgroundCommandInfo, BackgroundStatus } from "./background-registry";
 export { spawnCommand, resolveShell, formatCommandDisplay } from "./spawn";
 
-// Single source of truth for the exposed MCP tools (5 total).
+// Single source of truth for the exposed MCP tools.
 const allTools: ToolModule[] = [
   runCommand,
   startCommand,
   readCommand,
   stopCommand,
   fileTransferInfo,
+  ...fileTools,
 ];
 
 const byName = new Map(allTools.map((tool) => [tool.name, tool]));
 
 export class ToolExecutor {
   private readonly ctx: ToolContext;
+  private readonly fileAbort = new AbortController();
   private readonly backgroundCommands: BackgroundCommandRegistry;
 
   constructor(
@@ -56,6 +60,7 @@ export class ToolExecutor {
     const posixRoot = env?.posixRoot;
     this.ctx = {
       workspaceRoot,
+      fileSignal: this.fileAbort.signal,
       resolve: (p: string) => resolveInWorkspace(workspaceRoot, p),
       commandRunner,
       backgroundCommands: this.backgroundCommands,
@@ -66,6 +71,7 @@ export class ToolExecutor {
         ? (abs) => hostPathToPosix(workspaceRoot, posixRoot, abs)
         : undefined,
     };
+    this.ctx.uploadSessions = new UploadSessions(this.ctx);
   }
 
   setTransferInfo(info: { filesBaseUrl?: string; maxTransferBytes?: number }): void {
@@ -84,12 +90,17 @@ export class ToolExecutor {
     try {
       return await tool.handle(this.ctx, args);
     } catch (e: any) {
+      if (fileTools.some(tool => tool.name === name)) {
+        return err(JSON.stringify({ ok: false, code: e?.statusCode ?? 400, error: e?.message ?? String(e) }));
+      }
       return err(`${name} failed: ${e?.message ?? String(e)}`);
     }
   }
 
   /** Stop all child processes owned by this executor. Safe to call more than once. */
   async dispose(): Promise<void> {
+    this.fileAbort.abort();
+    await this.ctx.uploadSessions?.dispose();
     await this.backgroundCommands.dispose();
   }
 }

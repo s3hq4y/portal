@@ -13,7 +13,7 @@
 import * as http from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { ToolCallResult, ToolExecutor } from "./tool-executor";
-import { FileHttpOptions, handleFilesHttp, isFilesRequest } from "./files/http";
+import { FileHttpOptions, handleFilesHttp, isFilesRequest, FILE_CORS } from "./files/http";
 
 export interface ServerInfo { name: string; version: string; }
 
@@ -34,7 +34,7 @@ export function generateRouteToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export const DEFAULT_SERVER_INSTRUCTIONS = `You are connected to the user's VS Code workspace via Portal, a deliberately minimal MCP server: commands and file transfer only.
+export const DEFAULT_SERVER_INSTRUCTIONS = `You are connected to the user's VS Code workspace via Portal, a deliberately minimal MCP server: commands, native text-file tools and binary file transfer.
 
 Session:
 - Reuse the Mcp-Session-Id returned by initialize for later requests. If it is lost or rejected, initialize again instead of guessing an ID.
@@ -48,7 +48,9 @@ Commands:
 - Use cwd rather than embedding directory changes in command strings.
 
 File transfer:
-- There are no text edit tools on this server (no read_file/write_file/edit_file/search/list tools). All file movement goes through the HTTP file API: call file_transfer_info for the tokenized endpoints (download/upload/delete/pack/unpack, GET/PUT/POST /files/<token>/...).
+- Prefer read_file, write_file, apply_patch and list_files for bounded UTF-8 source files. Overwrites/patches require the current full-file SHA256. Read all pages with expected_sha256 to detect changes; never silently truncate.
+- Use begin_upload, upload_chunk, upload_status, commit_upload and cancel_upload for retry-safe binary transfers. Sessions expire after 30 minutes and do not survive Portal restarts. Query status after a network timeout before retrying a commit.
+- HTTP remains available for binary files: call file_transfer_info for endpoints. HEAD returns metadata only; Range responses carry a range hash/weak ETag, NOT a full-file hash suitable for overwrite conditions.
 - Inspect results after running commands and ask before destructive or irreversible operations.`;
 
 export class McpHttpServer {
@@ -78,7 +80,15 @@ export class McpHttpServer {
   // Bind loopback-only; the tunnel is the only thing that exposes it publicly.
   async start(preferredPort = 0): Promise<number> {
     return new Promise<number>((resolve, reject) => {
-      this.httpServer = http.createServer((req, res) => { void this.handle(req, res); });
+      this.httpServer = http.createServer((req, res) => {
+        void this.handle(req, res).catch(() => {
+          // Never leave an unhandled async rejection or a hanging response.
+          if (res.destroyed || res.writableEnded) return;
+          if (res.headersSent) { res.destroy(); return; }
+          res.writeHead(500, { ...FILE_CORS, "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "Internal request error" }));
+        });
+      });
       this.httpServer.on("error", reject);
       this.httpServer.listen(preferredPort || 0, "127.0.0.1", () => {
         const addr = this.httpServer!.address();
@@ -105,11 +115,7 @@ export class McpHttpServer {
   // HTTP entry point: CORS preflight, health check, /files delegation, then JSON-RPC POST.
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, GET, PUT, DELETE, HEAD, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, mcp-session-id, Range, ngrok-skip-browser-warning",
-      });
+      res.writeHead(204, FILE_CORS);
       res.end();
       return;
     }
@@ -190,7 +196,7 @@ export class McpHttpServer {
         const sessionIdNew = sessionId || randomUUID();
         this.sessions.set(sessionIdNew, { id: sessionIdNew, createdAt: Date.now() });
         this.hooks?.onSessionCreated?.();
-        const appendices: string[] = [];
+        const appendices: string[] = ["Available native file tools: read_file, write_file, apply_patch, list_files, begin_upload, upload_chunk, upload_status, commit_upload, cancel_upload. Their tools/list schemas are authoritative; overwrites require the current full-file SHA256, and upload sessions expire after 30 minutes or server restart."];
         const base = this.fileHttp?.filesBaseUrl;
         if (base) {
           appendices.push(`File HTTP (same token):\nGET ${base}?op=info\nGET/PUT ${base}/<relpath>\nPOST ${base}?op=pack  POST ${base}?op=unpack&dest=.\nCall file_transfer_info for details.`);
@@ -216,19 +222,22 @@ export class McpHttpServer {
       case "tools/call": {
         const name = String(msg?.params?.name ?? "");
         const args = msg?.params?.arguments ?? {};
+        const fileOperation = ["read_file", "write_file", "apply_patch", "list_files", "begin_upload", "upload_chunk", "upload_status", "commit_upload", "cancel_upload"].includes(name);
+        // Never mirror source text or binary chunks into activity logs.
+        const auditArgs = fileOperation ? { path: args.path, upload_id: args.upload_id, index: args.index } : args;
         this.hooks?.onRequestStart?.();
         const startedAt = Date.now();
         let result: ToolCallResult;
         try {
           result = await this.executor.callTool(name, args);
         } catch (e: any) {
-          this.hooks?.onRequestEnd?.({ tool: name, ok: false, durationMs: Date.now() - startedAt, args, resultText: String(e?.message ?? e) });
+          this.hooks?.onRequestEnd?.({ tool: name, ok: false, durationMs: Date.now() - startedAt, args: auditArgs, resultText: String(e?.message ?? e) });
           throw e;
         }
         const fullText = (result.content ?? []).map((c) => c.text ?? "").join("\n");
         // Keep the activity hook cheap: never copy megabytes of output onto the UI thread.
-        const resultText = fullText.length > 8192 ? fullText.slice(0, 8192) + "\u2026" : fullText;
-        this.hooks?.onRequestEnd?.({ tool: name, ok: !result.isError, durationMs: Date.now() - startedAt, args, resultText });
+        const resultText = fileOperation && !result.isError ? "File operation completed" : fullText.length > 8192 ? fullText.slice(0, 8192) + "\u2026" : fullText;
+        this.hooks?.onRequestEnd?.({ tool: name, ok: !result.isError, durationMs: Date.now() - startedAt, args: auditArgs, resultText });
         return { result };
       }
       case "resources/list":

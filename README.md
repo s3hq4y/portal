@@ -50,3 +50,6 @@ portal/
 ## License
 
 [GNU General Public License v3](LICENSE) — GPL-3.0-or-later.
+
+## VS Code extension file tools
+The extension now provides bounded native text I/O, exact patches, directory pagination and retry-safe chunk uploads. HTTP and MCP share path checks, write locks and publication primitives. See [File tools](vscode-extension/FILE-TOOLS.md). The duplicated standalone desktop client is not migrated in this change; its file-tool capabilities differ from the extension.
