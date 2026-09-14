@@ -6,7 +6,7 @@
 用户授权将本次两阶段改动提交 GitHub 并创建面向 `main` 的 PR。工作分支：`feat/reliable-mcp-files`。按用户要求不编译、不构建、不运行验收、不重启现有服务。
 
 ## 当前状态
-源码与双语文档已写回，静态语法解析及 Git 差异/哈希核对通过；准备提交、推送并创建 PR。以下为实现说明，不代表运行验收完成。
+源码与双语文档已提交并推送到 `feat/reliable-mcp-files`，已创建草稿 PR [#1](https://github.com/s3hq4y/portal/pull/1)，目标为 `main`，未合并。静态语法解析及 Git 差异/哈希核对通过，仍待维护者运行验收。
 
 ## 第一阶段：可靠性与安全
 - 唯一临时文件及条件发布；HTTP PUT 的 If-Match / If-None-Match 支持。
@@ -44,3 +44,9 @@
 - ZIP逐文件发布而非整包事务；异步压缩仍有受限CPU和内存开销。
 - 取消不能撤销已经完成的文件发布，也不能中断所有内核操作。超时后应查询回执或目标hash。
 - 独立桌面 `client/` 的复制实现未迁移，本次README和扩展文档明确能力差异。
+
+## GitHub交接
+- 功能提交：`7209f795d1bfc390cd93ef4694537349e70a441d`（feat: add reliable MCP file tools and bounded transfers）。
+- PR：https://github.com/s3hq4y/portal/pull/1 ，草稿状态，面向main，包含两阶段改动。
+- 本文档随后单独提交以记录已创建PR的实际状态；不重写功能提交，不force-push，不合并主分支。
+- 构建/运行验证仍未执行；请维护者验证后将PR转为Ready for review并按仓库流程合并。
