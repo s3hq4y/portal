@@ -4,6 +4,7 @@
  * (2) the workspace jail (resolveInWorkspace) for everything else.
  */
 import * as path from "node:path";
+import * as fsp from "node:fs/promises";
 import { resolveInWorkspace } from "../tools/workspace";
 
 // Blocked patterns: VCS internals, credentials, private keys and certificates.
@@ -28,6 +29,7 @@ export function isDenied(rel: string): boolean {
 
 export function resolveSafe(workspaceRoot: string, rel: string): string {
   const n = normalizeRel(rel);
+  validateRelativePath(n);
   if (isDenied(n)) throw new Error(`Path is blocked: ${n || "."}`);
   return resolveInWorkspace(workspaceRoot, n || ".");
 }
@@ -66,4 +68,41 @@ export function guessContentType(filePath: string): string {
     ".wasm": "application/wasm",
   };
   return map[ext] ?? "application/octet-stream";
+}
+
+/** Reject ambiguous Windows names and traversal before applying the lexical jail. */
+export function validateRelativePath(rel: string): void {
+  const n = normalizeRel(rel);
+  if (/[\x00-\x1f\x7f]/.test(n) || n.split("/").some((part) => part === "..")) {
+    throw new Error("Path is blocked: invalid path or traversal");
+  }
+  if (process.platform === "win32" && n.split("/").some((part) =>
+    /[:*?<>|]/.test(part) || (part !== "." && /[. ]$/.test(part)) ||
+    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
+    throw new Error("Path is blocked: Windows device, stream or ambiguous name");
+  }
+}
+
+/** The configured root is trusted; links below it are deliberately not followed.
+ * This reduces link traversal risk, but is not a sandbox against a local process
+ * actively replacing directories between checks and OS operations.
+ */
+export async function resolveSafeLocal(workspaceRoot: string, rel: string): Promise<string> {
+  const abs = resolveSafe(workspaceRoot, rel);
+  const canonicalRel = path.relative(workspaceRoot, abs).replace(/\\/g, "/");
+  if (isDenied(canonicalRel)) throw new Error("Path is blocked");
+  let current = workspaceRoot;
+  const parts = canonicalRel.split("/").filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    current = path.join(current, parts[i]);
+    const st = await fsp.lstat(current).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null;
+      throw e;
+    });
+    if (!st) break;
+    if (st.isSymbolicLink()) throw new Error("Path is blocked: symbolic links/junctions are not supported");
+    if (i < parts.length - 1 && !st.isDirectory()) throw new Error("Path parent is not a directory");
+    if (!st.isDirectory() && !st.isFile()) throw new Error("Path is blocked: special files are not supported");
+  }
+  return abs;
 }

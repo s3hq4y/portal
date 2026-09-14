@@ -16,12 +16,14 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { guessContentType, isDenied, parseFilesRequest, resolveSafe, normalizeRel } from "./paths";
-import { unzipEntries, zipEntries, ZipEntry } from "./zip";
+import { guessContentType, isDenied, parseFilesRequest, resolveSafeLocal, normalizeRel } from "./paths";
+import { unzipEntriesAsync, zipEntriesAsync, ZipEntry } from "./zip";
 import { SKIP_DIRS } from "../tools/workspace";
 import { WslIo } from "./wsl-io";
+import { checkAborted, fileError as httpError, withFileLock, readLimitedFile, sha256File, publishLocalFile } from "./file-ops";
 
 export interface FileHttpOptions {
   workspaceRoot: string;
@@ -30,31 +32,37 @@ export interface FileHttpOptions {
   filesBaseUrl?: string;
   wslDistro?: string;
   posixRoot?: string;
-  onTransfer?: (info: { op: string; path: string; ok: boolean; bytes?: number; detail?: string }) => void;
+  signal?: AbortSignal;
+  requestTimeoutMs?: number;
+  onTransfer?: (info: { op: string; path: string; ok: boolean; bytes?: number; detail?: string; requestId?: string; durationMs?: number; phase?: string }) => void;
 }
 
 function wslIo(opts: FileHttpOptions): WslIo | undefined {
   if (!opts.wslDistro || !opts.posixRoot) return undefined;
-  return new WslIo(opts.wslDistro, opts.posixRoot);
+  return new WslIo(opts.wslDistro, opts.posixRoot, opts.signal);
 }
 
 // Wide-open CORS (same rationale as mcp-server) incl. headers clients send
 // through ngrok.
-const cors = {
+export const FILE_CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, HEAD, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Content-Range, Range, ngrok-skip-browser-warning",
-  "Access-Control-Expose-Headers": "Content-Length, Accept-Ranges, Content-Range, X-File-Sha256, ETag, X-File-Path",
+  "Access-Control-Allow-Headers": "Content-Type, Content-Range, Range, If-Match, If-None-Match, mcp-session-id, ngrok-skip-browser-warning",
+  "Access-Control-Expose-Headers": "Content-Length, Accept-Ranges, Content-Range, X-File-Sha256, ETag, X-File-Path, X-Range-Sha256, X-Request-Id",
 };
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
+  if (res.headersSent) { res.destroy(); return; }
   const data = JSON.stringify(body);
-  res.writeHead(status, { ...cors, "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(data) });
+  res.writeHead(status, { ...FILE_CORS, "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(data) });
   res.end(data);
 }
 
 function text(res: http.ServerResponse, status: number, msg: string): void {
-  res.writeHead(status, { ...cors, "Content-Type": "text/plain; charset=utf-8" });
+  if (res.destroyed || res.writableEnded) return;
+  if (res.headersSent) { res.destroy(); return; }
+  res.writeHead(status, { ...FILE_CORS, "Content-Type": "text/plain; charset=utf-8" });
   res.end(msg);
 }
 
@@ -73,9 +81,40 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
   if (!parsed) { text(res, 404, "Not Found"); return; }
   const op = (parsed.query.get("op") || "").toLowerCase();
   const method = (req.method || "GET").toUpperCase();
+  const requestId = randomUUID(), started = Date.now();
+  const controller = new AbortController();
+  const notify = opts.onTransfer;
+  let detail = "request accepted", bytes: number | undefined, operation = op || method, recorded = false;
+  const safeNotify = (info: Parameters<NonNullable<FileHttpOptions["onTransfer"]>>[0]) => {
+    try { notify?.(info); } catch { /* Logging must never break a transfer. */ }
+  };
+  const finish = (completed: boolean) => {
+    if (recorded) return;
+    recorded = true; clearTimeout(deadline);
+    safeNotify({ op: operation, path: parsed!.rel, ok: completed && res.statusCode < 400,
+      bytes: completed ? bytes : undefined, requestId, durationMs: Date.now() - started,
+      phase: completed ? "finish" : "abort", detail });
+  };
+  const deadline = setTimeout(() => {
+    detail = "File request deadline exceeded";
+    json(res, 504, { ok: false, error: detail, requestId });
+    controller.abort();
+  }, opts.requestTimeoutMs ?? 120_000);
+  res.setHeader("X-Request-Id", requestId);
+  res.once("finish", () => finish(true));
+  res.once("close", () => { if (!res.writableFinished) { controller.abort(); finish(false); } });
+  req.once("aborted", () => { detail = "Client aborted request"; controller.abort(); });
+  controller.signal.addEventListener("abort", () => {
+    if (!req.complete && !req.destroyed) setImmediate(() => req.destroy());
+  }, { once: true });
+  opts = { ...opts, signal: controller.signal, onTransfer: (info) => {
+    operation = info.op; bytes = info.bytes; detail = info.detail ?? detail;
+    if (info.phase === "progress") safeNotify({ ...info, requestId, durationMs: Date.now() - started });
+  } };
+  safeNotify({ op: operation, path: parsed.rel, ok: true, requestId, durationMs: 0, phase: "start", detail });
   try {
     if (method === "OPTIONS") {
-      res.writeHead(204, cors);
+      res.writeHead(204, FILE_CORS);
       res.end();
       return;
     }
@@ -85,6 +124,9 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
           ok: true,
           filesBaseUrl: opts.filesBaseUrl,
           maxBytes: opts.maxBytes,
+          conditionalUpload: { ifMatch: '"<sha256>" or *', ifNoneMatch: "*" },
+          headIncludesHash: false,
+          requestTimeoutMs: opts.requestTimeoutMs ?? 120_000,
           workspace: opts.workspaceRoot,
           endpoints: {
             info: "GET {base}?op=info",
@@ -113,25 +155,25 @@ export async function handleFilesHttp(req: http.IncomingMessage, res: http.Serve
     if (!parsed.rel) { text(res, 400, "Missing path"); return; }
     if (isDenied(parsed.rel)) { text(res, 403, "Path is blocked"); return; }
 
-    const abs = wslIo(opts) ? parsed.rel : resolveSafe(opts.workspaceRoot, parsed.rel);
+    const abs = wslIo(opts) ? wslIo(opts)!.resolvePosix(parsed.rel) : await resolveSafeLocal(opts.workspaceRoot, parsed.rel);
     if (method === "GET" || method === "HEAD") {
       await sendFile(req, res, opts, abs, parsed.rel, method === "HEAD");
       return;
     }
     if (method === "PUT") {
-      await receiveFile(req, res, opts, abs, parsed.rel, parsed.query.get("overwrite") !== "false");
+      await withFileLock(opts.workspaceRoot + "/" + abs, opts.signal, () => receiveFile(req, res, opts, abs, parsed!.rel, parsed!.query.get("overwrite") !== "false"));
       return;
     }
     if (method === "DELETE") {
-      await deleteFile(res, opts, abs, parsed.rel);
+      await withFileLock(opts.workspaceRoot + "/" + abs, opts.signal, () => deleteFile(res, opts, abs, parsed!.rel));
       return;
     }
     text(res, 405, "Method Not Allowed");
   } catch (e: any) {
     opts.onTransfer?.({ op: method, path: parsed.rel, ok: false, detail: e?.message });
     const msg = e?.message ?? String(e);
-    const status = /escapes workspace|blocked/i.test(msg) ? 403 : 400;
-    json(res, status, { ok: false, error: msg });
+    const status = e?.statusCode ?? (/escapes workspace|blocked/i.test(msg) ? 403 : /too large|exceeds|maxTransferBytes/i.test(msg) ? 413 : /timed out|deadline/i.test(msg) ? 504 : e?.code === "ENOENT" ? 404 : e?.code === "EEXIST" ? 409 : e?.code === "EACCES" || e?.code === "EPERM" ? 403 : 400);
+    json(res, status, { ok: false, error: msg, requestId });
   }
 }
 
@@ -149,9 +191,10 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
       return;
     }
     const entries = await wsl.list(relDir || ".", true);
+    let truncated = entries.length >= 100_000;
     const files: Array<Record<string, unknown>> = [];
     for (const e of entries) {
-      if (files.length >= 2000) break;
+      if (files.length >= 2000) { truncated = true; break; }
       if (e.kind !== "file") continue;
       if (isDenied(e.rel)) continue;
       const parts = e.rel.split("/");
@@ -166,11 +209,11 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
         kind: "file",
       });
     }
-    json(res, 200, { ok: true, root: normalizeRel(relDir || "."), count: files.length, files });
-    opts.onTransfer?.({ op: "LIST", path: relDir || ".", ok: true, bytes: files.length });
+    json(res, 200, { ok: true, root: normalizeRel(relDir || "."), count: files.length, truncated, files });
+    opts.onTransfer?.({ op: "LIST", path: relDir || ".", ok: true, detail: `${files.length} entries; truncated=${truncated}` });
     return;
   }
-  const root = resolveSafe(opts.workspaceRoot, relDir || ".");
+  const root = await resolveSafeLocal(opts.workspaceRoot, relDir || ".");
   const st = await fsp.stat(root).catch(() => null);
   if (!st) { json(res, 404, { ok: false, error: "Not found" }); return; }
   if (st.isFile()) {
@@ -182,11 +225,13 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
   // tree must not occupy the handler forever (the walk stays async, this only
   // bounds its lifetime).
   const deadline = Date.now() + 10_000;
+  let truncated = false;
   const walk = async (dir: string) => {
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (files.length >= 2000 || Date.now() > deadline) return;
+      checkAborted(opts.signal);
+      if (files.length >= 2000 || Date.now() > deadline) { truncated = true; return; }
       const full = path.join(dir, e.name);
       const rel = path.relative(opts.workspaceRoot, full).replace(/\\/g, "/");
       if (isDenied(rel)) continue;
@@ -200,8 +245,8 @@ async function listDir(res: http.ServerResponse, opts: FileHttpOptions, relDir: 
     }
   };
   await walk(root);
-  json(res, 200, { ok: true, root: normalizeRel(relDir || "."), count: files.length, files });
-  opts.onTransfer?.({ op: "LIST", path: relDir || ".", ok: true, bytes: files.length });
+  json(res, 200, { ok: true, root: normalizeRel(relDir || "."), count: files.length, truncated, files });
+  opts.onTransfer?.({ op: "LIST", path: relDir || ".", ok: true, detail: `${files.length} entries; truncated=${truncated}` });
 }
 
 async function statEntry(workspaceRoot: string, abs: string): Promise<Record<string, unknown>> {
@@ -214,41 +259,38 @@ async function statEntry(workspaceRoot: string, abs: string): Promise<Record<str
   };
 }
 
-// Compile a glob pattern (** / * / ?) into a matcher with standard semantics:
-//   "*"   stays within one path segment
-//   "**"  crosses segments; "**/" also matches zero directories
-//   "?"   one character within a segment
-// Returns null for the match-everything default ("**/*"), and the regex is
-// linear-time — the old backtracking matcher could loop forever on some
-// pattern/name pairs (e.g. "*.md" vs "src/index.ts"), freezing the server.
+// Bounded dynamic-programming glob matcher; no regex backtracking.
+// "**/" matches zero or more complete directories, "*" stays in a segment.
 function compileGlob(pattern: string): ((rel: string) => boolean) | null {
   const p = pattern.replace(/\\/g, "/").trim();
   if (!p || p === "**" || p === "**/*") return null;
-  let re = "";
+  if (p.length > 512) throw new Error("Glob is too complex");
+  const tokens: Array<{ kind: "literal" | "one" | "star" | "all" | "dirs"; char?: string }> = [];
   for (let i = 0; i < p.length; i++) {
-    const c = p[i];
-    if (c === "*") {
-      if (p[i + 1] === "*") {
-        i++;
-        if (p[i + 1] === "/") { i++; re += "(?:.*/)?"; } else { re += ".*"; }
-      } else {
-        re += "[^/]*";
-      }
-    } else if (c === "?") {
-      re += "[^/]";
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    }
+    if (p[i] === "*" && p[i + 1] === "*") {
+      i++;
+      if (p[i + 1] === "/") { i++; tokens.push({ kind: "dirs" }); }
+      else tokens.push({ kind: "all" });
+    } else if (p[i] === "*") tokens.push({ kind: "star" });
+    else if (p[i] === "?") tokens.push({ kind: "one" });
+    else tokens.push({ kind: "literal", char: p[i] });
   }
-  const rx = new RegExp("^" + re + "$");
-  return (rel) => rx.test(rel);
-}
-
-// Streamed SHA-256 — returned as X-File-Sha256 and reused as the ETag.
-async function sha256File(abs: string): Promise<string> {
-  const hash = createHash("sha256");
-  await pipeline(fs.createReadStream(abs), hash);
-  return hash.digest("hex");
+  return (rel) => {
+    let state = new Uint8Array(rel.length + 1); state[0] = 1;
+    for (const token of tokens) {
+      const next = new Uint8Array(rel.length + 1);
+      if (token.kind === "star" || token.kind === "all" || token.kind === "dirs") next[0] = state[0];
+      let seen = false;
+      for (let j = 1; j <= rel.length; j++) {
+        seen = seen || state[j - 1] === 1;
+        if (token.kind === "star" || token.kind === "all") next[j] = state[j] || (next[j - 1] && (token.kind === "all" || rel[j - 1] !== "/") ? 1 : 0);
+        else if (token.kind === "dirs") next[j] = state[j] || (seen && rel[j - 1] === "/" ? 1 : 0);
+        else next[j] = state[j - 1] && (token.kind === "one" ? rel[j - 1] !== "/" : rel[j - 1] === token.char) ? 1 : 0;
+      }
+      state = next;
+    }
+    return state[rel.length] === 1;
+  };
 }
 
 // Download handler: supports single byte-ranges (206 Partial Content) and
@@ -259,33 +301,32 @@ async function sendFile(req: http.IncomingMessage, res: http.ServerResponse, opt
     const st = await wsl.stat(rel);
     if (!st) { text(res, 404, "Not found"); return; }
     if (st.kind === "dir") {
+      if (headOnly) { res.writeHead(400, FILE_CORS); res.end(); return; }
       await listDir(res, opts, rel, "**/*");
       return;
     }
+    if (headOnly) { sendHead(res, rel, st.size, st.mtimeMs); return; }
+    if (await sendByteRange(req, res, opts, rel, abs, st.size, st.mtimeMs, wsl)) return;
+    transferStage(opts, "GET", rel, "reading WSL file");
     const data = await wsl.readFile(rel, opts.maxBytes);
     const hash = createHash("sha256").update(data).digest("hex");
     const size = data.length;
-    const range = parseRange(String(req.headers.range || ""), size);
-    const start = range ? range.start : 0;
-    const end = range ? range.end : size - 1;
+
+    const start = 0;
+    const end = size - 1;
     const slice = size === 0 ? Buffer.alloc(0) : data.subarray(start, end + 1);
     const headers: Record<string, string | number> = {
-      ...cors,
+      ...FILE_CORS,
       "Content-Type": guessContentType(rel),
       "Content-Length": slice.length,
       "Accept-Ranges": "bytes",
       "Last-Modified": new Date(st.mtimeMs).toUTCString(),
       "X-File-Sha256": hash,
-      "X-File-Path": rel,
+      "X-File-Path": encodeURIComponent(rel),
       "ETag": `"${hash}"`,
-      "Content-Disposition": `attachment; filename="${path.basename(rel).replace(/"/g, "")}"`,
+      "Content-Disposition": contentDisposition(rel),
     };
-    if (range) {
-      headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
-      res.writeHead(206, headers);
-    } else {
-      res.writeHead(200, headers);
-    }
+    res.writeHead(200, headers);
     if (headOnly || slice.length === 0) { res.end(); opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: 0 }); return; }
     res.end(slice);
     opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: slice.length });
@@ -294,113 +335,137 @@ async function sendFile(req: http.IncomingMessage, res: http.ServerResponse, opt
   const st = await fsp.stat(abs).catch(() => null);
   if (!st) { text(res, 404, "Not found"); return; }
   if (st.isDirectory()) {
+    if (headOnly) { res.writeHead(400, FILE_CORS); res.end(); return; }
     await listDir(res, opts, rel, "**/*");
     return;
   }
+  if (headOnly) { sendHead(res, rel, st.size, st.mtimeMs); return; }
   const size = st.size;
-  const hash = await sha256File(abs);
+  if (await sendByteRange(req, res, opts, rel, abs, size, st.mtimeMs)) return;
+  transferStage(opts, "GET", rel, "hashing file");
+  const hash = await sha256File(abs, opts.signal);
   const ctype = guessContentType(abs);
-  const range = parseRange(String(req.headers.range || ""), size);
-  const start = range ? range.start : 0;
-  const end = range ? range.end : size - 1;
+
+  const start = 0;
+  const end = size - 1;
   const len = size === 0 ? 0 : (end - start + 1);
   const headers: Record<string, string | number> = {
-    ...cors,
+    ...FILE_CORS,
     "Content-Type": ctype,
     "Content-Length": len,
     "Accept-Ranges": "bytes",
     "Last-Modified": st.mtime.toUTCString(),
     "X-File-Sha256": hash,
-    "X-File-Path": rel,
+    "X-File-Path": encodeURIComponent(rel),
     "ETag": `"${hash}"`,
-    "Content-Disposition": `attachment; filename="${path.basename(abs).replace(/"/g, "")}"`,
+    "Content-Disposition": contentDisposition(abs),
   };
-  if (range) {
-    headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
-    res.writeHead(206, headers);
-  } else {
-    res.writeHead(200, headers);
-  }
+  res.writeHead(200, headers);
   if (headOnly || size === 0) { res.end(); opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: 0 }); return; }
   const stream = fs.createReadStream(abs, { start, end });
-  stream.on("error", () => { try { res.destroy(); } catch { /* ignore */ } });
-  stream.pipe(res);
-  opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: len });
+  // Record successful completion only when the response has actually finished.
+  opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: len, detail: "streaming response" });
+  await pipeline(stream, res, { signal: opts.signal });
 }
 
 // Parses `bytes=a-b`, `bytes=a-`, and the suffix form `bytes=-n`.
-function parseRange(header: string, size: number): { start: number; end: number } | null {
+function parseRange(header: string, size: number): { start: number; end: number } | null | false {
+  if (!header) return null;
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!m || size <= 0) return null;
-  let start = m[1] === "" ? NaN : Number(m[1]);
-  let end = m[2] === "" ? NaN : Number(m[2]);
-  if (Number.isNaN(start) && !Number.isNaN(end)) { start = Math.max(0, size - end); end = size - 1; }
-  else {
-    if (Number.isNaN(start)) return null;
-    if (Number.isNaN(end)) end = size - 1;
+  if (!m || (!m[1] && !m[2])) return null; // Unsupported/malformed ranges may be ignored.
+  if (size <= 0) return false;
+  let start: number, end: number;
+  if (!m[1]) {
+    const suffix = Number(m[2]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return false;
+    start = Math.max(0, size - suffix); end = size - 1;
+  } else {
+    start = Number(m[1]); end = m[2] ? Number(m[2]) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || end < start) return false;
+    end = Math.min(end, size - 1);
   }
-  if (start < 0 || end >= size || start > end) return null;
   return { start, end };
 }
 
-// Upload handler: streams to <file>.portal-upload.tmp then renames (atomic),
+// Upload handler: unique sibling temporary file, then rename/link publication,
 // enforces maxBytes, and applies backpressure (pauses the request while the
 // disk stream is full).
 async function receiveFile(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions, abs: string, rel: string, overwrite: boolean): Promise<void> {
-  if (isDenied(rel)) { text(res, 403, "Path is blocked"); return; }
+  transferStage(opts, "PUT", rel, "validating upload");
+  if (req.headers["if-none-match"] && req.headers["if-none-match"] !== "*") throw httpError(400, "Only If-None-Match: * is supported for uploads");
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > opts.maxBytes) {
+    json(res, 413, { ok: false, error: "File exceeds maxTransferBytes" });
+    req.resume(); return;
+  }
   const wsl = wslIo(opts);
+  if (!wsl) await resolveSafeLocal(opts.workspaceRoot, rel);
+  const st = wsl ? await wsl.stat(rel) : await fsp.stat(abs).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT") return null; throw e;
+  });
+  if (st && ("kind" in st ? st.kind === "dir" : st.isDirectory())) throw new Error("Refusing to overwrite a directory");
+  const exists = st != null;
+  const createOnly = !overwrite || req.headers["if-none-match"] === "*";
+  if (exists && createOnly) throw httpError(req.headers["if-none-match"] ? 412 : 409, "File already exists");
+  const checkMatch = async () => {
+    checkAborted(opts.signal);
+    const expected = req.headers["if-match"];
+    if (!expected) return;
+    if (!wsl) await resolveSafeLocal(opts.workspaceRoot, rel);
+    const current = wsl ? await wsl.stat(rel) : await fsp.stat(abs).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null; throw e;
+    });
+    if (!current) throw httpError(412, "File changed or no longer exists");
+    if (expected === "*") return;
+    const hash = wsl ? createHash("sha256").update(await wsl.readFile(rel, opts.maxBytes)).digest("hex") : await sha256File(abs, opts.signal);
+    if (expected !== `"${hash}"`) throw httpError(412, "File SHA256 changed; read the latest file before writing");
+  };
+  await checkMatch();
+  transferStage(opts, "PUT", rel, "receiving upload");
   if (wsl) {
-    const st = await wsl.stat(rel);
-    const exists = st?.kind === "file";
-    if (exists && !overwrite) { json(res, 409, { ok: false, error: "exists" }); return; }
-    if (st?.kind === "dir") { json(res, 400, { ok: false, error: "Refusing to overwrite a directory" }); return; }
     const data = await readRawBody(req, opts.maxBytes);
-    await wsl.writeFile(rel, data);
+    await checkMatch();
+    transferStage(opts, "PUT", rel, "committing WSL upload");
+    const expected = req.headers["if-match"];
+    const expectedSha256 = typeof expected === "string" && /^"[a-f0-9]{64}"$/.test(expected) ? expected.slice(1, -1) : undefined;
+    await wsl.writeFile(rel, data, !createOnly, { expectedSha256, mustExist: expected === "*" });
     const hash = createHash("sha256").update(data).digest("hex");
-    opts.onTransfer?.({ op: "PUT", path: rel, ok: true, bytes: data.length });
+    opts.onTransfer?.({ op: "PUT", path: rel, ok: true, bytes: data.length, detail: "committed" });
     json(res, exists ? 200 : 201, { ok: true, path: rel, bytes: data.length, sha256: hash, overwritten: exists });
     return;
   }
-  const exists = await fsp.stat(abs).then((s) => s.isFile()).catch(() => false);
-  if (exists && !overwrite) { json(res, 409, { ok: false, error: "exists" }); return; }
   await fsp.mkdir(path.dirname(abs), { recursive: true });
-  const tmp = abs + ".portal-upload.tmp";
-  await fsp.rm(tmp, { force: true });
-  const ws = fs.createWriteStream(tmp);
+  await resolveSafeLocal(opts.workspaceRoot, rel);
+  const tmp = abs + ".portal-upload." + randomUUID() + ".tmp";
+  const hash = createHash("sha256");
   let size = 0;
-  let aborted = false;
+  const counter = new Transform({ transform(chunk: Buffer, _encoding, done) {
+    size += chunk.length;
+    if (size > opts.maxBytes) { done(httpError(413, "File exceeds maxTransferBytes")); return; }
+    hash.update(chunk); done(null, chunk);
+  } });
   try {
-    await new Promise<void>((resolve, reject) => {
-      req.on("data", (c: Buffer) => {
-        size += c.length;
-        if (size > opts.maxBytes) {
-          aborted = true;
-          req.destroy();
-          ws.destroy();
-          reject(new Error(`File exceeds maxTransferBytes (${opts.maxBytes})`));
-          return;
-        }
-        if (!ws.write(c)) req.pause();
-      });
-      ws.on("drain", () => req.resume());
-      req.on("end", () => ws.end());
-      req.on("error", reject);
-      ws.on("error", reject);
-      ws.on("finish", () => resolve());
-    });
-    await fsp.rename(tmp, abs);
-    const hash = await sha256File(abs);
-    opts.onTransfer?.({ op: "PUT", path: rel, ok: true, bytes: size });
-    json(res, exists ? 200 : 201, { ok: true, path: rel, bytes: size, sha256: hash, overwritten: exists });
-  } catch (e: any) {
-    try { await fsp.rm(tmp, { force: true }); } catch { /* ignore */ }
-    opts.onTransfer?.({ op: "PUT", path: rel, ok: false, detail: e?.message });
-    if (!aborted) json(res, 500, { ok: false, error: e?.message ?? String(e) });
-    else json(res, 413, { ok: false, error: e?.message ?? String(e) });
+    const mode = st && !("kind" in st) ? st.mode : 0o600;
+    await pipeline(req, counter, fs.createWriteStream(tmp, { flags: "wx", mode }), { signal: opts.signal });
+    await resolveSafeLocal(opts.workspaceRoot, rel);
+    await checkMatch();
+    checkAborted(opts.signal);
+    transferStage(opts, "PUT", rel, "committing upload");
+    const expected = req.headers["if-match"];
+    await publishLocalFile(opts.workspaceRoot, rel, tmp, { createOnly,
+      expectedSha256: typeof expected === "string" && /^"[a-f0-9]{64}"$/.test(expected) ? expected.slice(1, -1) : undefined,
+      mustExist: expected === "*", signal: opts.signal });
+    const sha256 = hash.digest("hex");
+    opts.onTransfer?.({ op: "PUT", path: rel, ok: true, bytes: size, detail: "committed" });
+    json(res, exists ? 200 : 201, { ok: true, path: rel, bytes: size, sha256, overwritten: exists });
+  } finally {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
   }
 }
 
 async function deleteFile(res: http.ServerResponse, opts: FileHttpOptions, abs: string, rel: string): Promise<void> {
+  checkAborted(opts.signal);
+  if (!wslIo(opts)) await resolveSafeLocal(opts.workspaceRoot, rel);
   const wsl = wslIo(opts);
   if (wsl) {
     const st = await wsl.stat(rel);
@@ -444,6 +509,7 @@ async function readRawBody(req: http.IncomingMessage, max: number): Promise<Buff
 async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions): Promise<void> {
   const body = await readJsonBody(req, 1_000_000);
   const paths: string[] = Array.isArray(body?.paths) ? body.paths.map(String) : ["."];
+  if (paths.length > 10000) throw new Error("Pack exceeds path limit");
   const entries: ZipEntry[] = [];
   let total = 0;
   const wsl = wslIo(opts);
@@ -453,9 +519,10 @@ async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts:
       if (!st) continue;
       if (st.kind === "file") {
         if (isDenied(normalizeRel(p))) continue;
-        total += st.size;
-        if (total > opts.maxBytes) throw new Error("Pack exceeds maxTransferBytes");
-        entries.push({ name: normalizeRel(p) || path.posix.basename(p), data: await wsl.readFile(p, opts.maxBytes) });
+        if (entries.length >= 10000) throw new Error("Pack exceeds 10000 files");
+        const data = await wsl.readFile(p, opts.maxBytes - total);
+        total += data.length;
+        entries.push({ name: normalizeRel(p) || path.posix.basename(p), data });
         continue;
       }
       const kids = await wsl.list(p, true);
@@ -463,14 +530,17 @@ async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts:
         if (e.kind !== "file") continue;
         if (isDenied(e.rel)) continue;
         if (e.rel.split("/").some((seg) => SKIP_DIRS.has(seg))) continue;
-        total += e.size;
-        if (total > opts.maxBytes) throw new Error("Pack exceeds maxTransferBytes");
-        entries.push({ name: e.rel, data: await wsl.readFile(e.rel, opts.maxBytes) });
+        if (entries.length >= 10000) throw new Error("Pack exceeds 10000 files");
+        const data = await wsl.readFile(e.rel, opts.maxBytes - total);
+        total += data.length;
+        entries.push({ name: e.rel, data });
       }
     }
-    const zip = zipEntries(entries);
+    checkAborted(opts.signal);
+    transferStage(opts, "PACK", paths.join(","), "compressing archive");
+    const zip = await zipEntriesAsync(entries, opts.signal);
     res.writeHead(200, {
-      ...cors,
+      ...FILE_CORS,
       "Content-Type": "application/zip",
       "Content-Length": zip.length,
       "Content-Disposition": 'attachment; filename="workspace.zip"',
@@ -480,13 +550,16 @@ async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return;
   }
   for (const p of paths) {
-    const abs = resolveSafe(opts.workspaceRoot, p);
+    const abs = await resolveSafeLocal(opts.workspaceRoot, p);
     const st = await fsp.stat(abs).catch(() => null);
     if (!st) continue;
     const collect = async (full: string) => {
       const rel = path.relative(opts.workspaceRoot, full).replace(/\\/g, "/");
       if (isDenied(rel)) return;
-      const s = await fsp.stat(full);
+      checkAborted(opts.signal);
+      const s = await fsp.lstat(full);
+      if (s.isSymbolicLink()) return;
+      await resolveSafeLocal(opts.workspaceRoot, rel);
       if (s.isDirectory()) {
         const kids = await fsp.readdir(full, { withFileTypes: true });
         for (const k of kids) {
@@ -494,16 +567,19 @@ async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts:
           await collect(path.join(full, k.name));
         }
       } else if (s.isFile()) {
-        total += s.size;
-        if (total > opts.maxBytes) throw new Error("Pack exceeds maxTransferBytes");
-        entries.push({ name: rel, data: await fsp.readFile(full) });
+        if (entries.length >= 10000) throw new Error("Pack exceeds 10000 files");
+        const data = await readLimitedFile(full, opts.maxBytes - total, opts.signal);
+        total += data.length;
+        entries.push({ name: rel, data });
       }
     };
     await collect(abs);
   }
-  const zip = zipEntries(entries);
+  checkAborted(opts.signal);
+  transferStage(opts, "PACK", paths.join(","), "compressing archive");
+  const zip = await zipEntriesAsync(entries, opts.signal);
   res.writeHead(200, {
-    ...cors,
+    ...FILE_CORS,
     "Content-Type": "application/zip",
     "Content-Length": zip.length,
     "Content-Disposition": 'attachment; filename="workspace.zip"',
@@ -514,17 +590,32 @@ async function packOp(req: http.IncomingMessage, res: http.ServerResponse, opts:
 
 // Extract zip entries into dest; entry names are re-jailed (no `..`, no absolute).
 async function unpackOp(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions, destRel: string): Promise<void> {
+  if (wslIo(opts)) await wslIo(opts)!.stat(destRel);
+  else await resolveSafeLocal(opts.workspaceRoot, destRel);
   const buf = await readRawBody(req, opts.maxBytes);
-  const entries = unzipEntries(buf);
+  transferStage(opts, "UNPACK", destRel, "validating archive");
+  const entries = await unzipEntriesAsync(buf, { maxBytes: opts.maxBytes, maxEntries: 10000, signal: opts.signal });
+  // Validate all destinations before writing the first file. Publication remains per-file, not a multi-file transaction.
+  for (const e of entries) {
+    const name = normalizeRel(e.name);
+    if (!name || e.name.startsWith("/") || /^[a-zA-Z]:/.test(name) || isDenied(name) || name.split("/").includes("..")) throw new Error("Path is blocked in archive");
+    const dest = normalizeRel(path.posix.join(normalizeRel(destRel || "."), name));
+    if (wslIo(opts)) {
+      if ((await wslIo(opts)!.stat(dest))?.kind === "dir") throw new Error("Refusing to overwrite a directory");
+    } else {
+      const abs = await resolveSafeLocal(opts.workspaceRoot, dest);
+      const st = await fsp.stat(abs).catch((e: NodeJS.ErrnoException) => { if (e.code === "ENOENT") return null; throw e; });
+      if (st?.isDirectory()) throw new Error("Refusing to overwrite a directory");
+    }
+  }
   const written: string[] = [];
   const wsl = wslIo(opts);
   if (wsl) {
     for (const e of entries) {
       const name = normalizeRel(e.name);
       if (!name || name.endsWith("/")) continue;
-      if (isDenied(name) || name.includes("..")) continue;
       const dest = normalizeRel(path.posix.join(normalizeRel(destRel || "."), name));
-      await wsl.writeFile(dest, e.data);
+      await withFileLock(opts.workspaceRoot + "/" + wsl.resolvePosix(dest), opts.signal, () => wsl.writeFile(dest, e.data));
       written.push(dest);
     }
     opts.onTransfer?.({ op: "UNPACK", path: destRel || ".", ok: true, bytes: buf.length, detail: `${written.length} files` });
@@ -534,12 +625,81 @@ async function unpackOp(req: http.IncomingMessage, res: http.ServerResponse, opt
   for (const e of entries) {
     const name = normalizeRel(e.name);
     if (!name || name.endsWith("/")) continue;
-    if (isDenied(name) || name.includes("..")) continue;
-    const abs = resolveSafe(opts.workspaceRoot, path.posix.join(normalizeRel(destRel || "."), name));
-    await fsp.mkdir(path.dirname(abs), { recursive: true });
-    await fsp.writeFile(abs, e.data);
+    const abs = await resolveSafeLocal(opts.workspaceRoot, path.posix.join(normalizeRel(destRel || "."), name));
+    await withFileLock(opts.workspaceRoot + "/" + abs, opts.signal, async () => {
+      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      await resolveSafeLocal(opts.workspaceRoot, path.relative(opts.workspaceRoot, abs));
+      const tmp = abs + ".portal-upload." + randomUUID() + ".tmp";
+      try {
+        const existing = await fsp.stat(abs).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+        await fsp.writeFile(tmp, e.data, { flag: "wx", mode: existing?.mode ?? 0o600, signal: opts.signal });
+        checkAborted(opts.signal);
+        await publishLocalFile(opts.workspaceRoot, path.relative(opts.workspaceRoot, abs), tmp, { createOnly: false, signal: opts.signal });
+      } finally { await fsp.rm(tmp, { force: true }).catch(() => undefined); }
+    });
     written.push(path.relative(opts.workspaceRoot, abs).replace(/\\/g, "/"));
   }
   opts.onTransfer?.({ op: "UNPACK", path: destRel || ".", ok: true, bytes: buf.length, detail: `${written.length} files` });
   json(res, 200, { ok: true, dest: normalizeRel(destRel || "."), count: written.length, files: written });
+}
+
+function contentDisposition(file: string): string {
+  const name = path.basename(file).replace(/[\r\n]/g, "_");
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  const encoded = encodeURIComponent(name).replace(/[!'()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+function sendHead(res: http.ServerResponse, rel: string, size: number, mtimeMs: number): void {
+  res.writeHead(200, { ...FILE_CORS, "Content-Type": guessContentType(rel), "Content-Length": size,
+    "Accept-Ranges": "bytes", "Last-Modified": new Date(mtimeMs).toUTCString(),
+    "X-File-Path": encodeURIComponent(rel), "Content-Disposition": contentDisposition(rel) });
+  res.end();
+}
+function transferStage(opts: FileHttpOptions, op: string, path: string, detail: string): void {
+  checkAborted(opts.signal);
+  opts.onTransfer?.({ op, path, ok: true, phase: "progress", detail });
+}
+
+/** Range responses hash only the returned bytes. A weak metadata ETag is NOT
+ * a write precondition. If-Range is conservatively served as a full 200. */
+async function sendByteRange(req: http.IncomingMessage, res: http.ServerResponse, opts: FileHttpOptions,
+  rel: string, abs: string, size: number, mtimeMs: number, wsl?: WslIo): Promise<boolean> {
+  if (!req.headers.range || req.headers["if-range"]) return false;
+  const range = parseRange(String(req.headers.range), size);
+  if (range === null) return false;
+  if (range === false) { res.writeHead(416, { ...FILE_CORS, "Content-Range": `bytes */${size}` }); res.end(); return true; }
+  const length = range.end - range.start + 1;
+  if (length > Math.min(opts.maxBytes, 4 * 1024 * 1024)) throw httpError(413, "Range exceeds 4 MiB; request smaller ranges");
+  transferStage(opts, "GET", rel, "reading byte range");
+  let data: Buffer;
+  if (wsl) {
+    data = await wsl.readRange(rel, range.start, length);
+    const after = await wsl.stat(rel);
+    if (!after || after.size !== size || after.mtimeMs !== mtimeMs) throw httpError(412, "File changed during range read");
+  } else {
+    const file = await fsp.open(await resolveSafeLocal(opts.workspaceRoot, rel), "r");
+    try {
+      const before = await file.stat();
+      if (before.size !== size || before.mtimeMs !== mtimeMs) throw httpError(412, "File changed before range read");
+      data = Buffer.alloc(length);
+      let offset = 0;
+      while (offset < length) {
+        checkAborted(opts.signal);
+        const read = await file.read(data, offset, length - offset, range.start + offset);
+        if (!read.bytesRead) throw httpError(412, "File changed during range read");
+        offset += read.bytesRead;
+      }
+      const after = await file.stat();
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw httpError(412, "File changed during range read");
+    } finally { await file.close(); }
+  }
+  checkAborted(opts.signal);
+  res.writeHead(206, { ...FILE_CORS, "Content-Type": guessContentType(rel), "Content-Length": length,
+    "Content-Range": `bytes ${range.start}-${range.end}/${size}`, "Accept-Ranges": "bytes",
+    "Last-Modified": new Date(mtimeMs).toUTCString(), "ETag": `W/"${size}-${mtimeMs}"`,
+    "X-Range-Sha256": createHash("sha256").update(data).digest("hex"),
+    "X-File-Path": encodeURIComponent(rel), "Content-Disposition": contentDisposition(rel) });
+  opts.onTransfer?.({ op: "GET", path: rel, ok: true, bytes: length, detail: "range response" });
+  res.end(data);
+  return true;
 }
