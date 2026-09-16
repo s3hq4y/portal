@@ -136,6 +136,10 @@ export function resolveShellExecutable(shell: ShellKind): string {
           "pwsh.exe",
           path.join(programFiles, "PowerShell", "7", "pwsh.exe"),
           path.join(programFilesX86, "PowerShell", "7", "pwsh.exe"),
+          // Microsoft Store / winget MSIX installs expose pwsh.exe through the
+          // per-user WindowsApps alias directory, which is often missing from the
+          // PATH of the VS Code extension host.
+          ...(process.env.LOCALAPPDATA ? [path.join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps", "pwsh.exe")] : []),
         ]);
         if (!found) throw new Error("shell='pwsh' was requested, but PowerShell 7 (pwsh.exe) was not found in PATH or its standard install directory.");
         return found;
