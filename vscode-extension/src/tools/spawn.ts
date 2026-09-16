@@ -1,6 +1,7 @@
 /** Cross-platform command launching shared by foreground and background tools. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
+import { buildCmdWrapperArgs, buildPowerShellWrapperCommand } from "./shell-utf8";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { MAX_CAPTURE } from "./types";
@@ -216,22 +217,27 @@ export function prepareCommand(request: CommandRequest | string, explicitShell?:
 
   const shell = resolveShell(explicitShell);
   const shellExe = resolveShellExecutable(shell);
-  const psUtf8 = "$utf8 = New-Object System.Text.UTF8Encoding($false); "
-    + "[Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; "
-    + "$env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'; ";
-
   if (shell === "cmd") {
+    // Batch scripts are parsed with the console code page, so the code page must be
+    // switched by the outer cmd.exe BEFORE the UTF-8 script is opened. Passing the
+    // command inline after "chcp 65001 &" is not enough: cmd.exe has already decoded
+    // its argv with the previous (ANSI) code page by then.
     return {
       executable: shellExe,
-      args: ["/d", "/s", "/c", `chcp 65001>nul & ${command}`],
+      args: buildCmdWrapperArgs(command),
       shell,
       displayCommand: command,
     };
   }
   if (shell === "powershell" || shell === "pwsh") {
+    // The whole -Command string is parsed before any statement runs, so a syntax
+    // error in the user command used to surface (in the ANSI code page) before the
+    // UTF-8 prelude executed. The wrapper sets the encodings first and only then
+    // compiles the user command from a base64 payload, so parse errors, runtime
+    // errors, Get-Content and native tool output are all UTF-8.
     const args = ["-NoLogo", "-NoProfile", "-NonInteractive"];
     if (process.platform === "win32") args.push("-ExecutionPolicy", "Bypass");
-    args.push("-Command", psUtf8 + command);
+    args.push("-Command", buildPowerShellWrapperCommand(command));
     return { executable: shellExe, args, shell, displayCommand: command };
   }
   if (process.platform === "win32") {
